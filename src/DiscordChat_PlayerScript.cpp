@@ -1,10 +1,14 @@
 #include "Channel.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 
 #include "DiscordChat.h"
 
+#include <chrono>
+
 using namespace std;
+using namespace std::chrono_literals;
 
 class DiscordChat_PlayerScript : public PlayerScript
 {
@@ -17,7 +21,21 @@ public:
             return;
         if (DiscordChat->ConfigAutoJoinChannelOnLogin == false)
             return;
-        DiscordChat->AutoJoinPlayerToChannel(player);
+        if (player == nullptr)
+            return;
+
+        // Defer the join until the client has had a chance to set up its chat
+        // UI. If we send SMSG_CHANNEL_NOTIFY too early in login, the client
+        // never allocates a channel slot, /N switching is broken, and any
+        // CHAT_MSG_CHANNEL traffic addressed to that channel is dropped.
+        ObjectGuid guid = player->GetGUID();
+        player->m_Events.AddEventAtOffset([guid]()
+        {
+            Player* delayedPlayer = ObjectAccessor::FindConnectedPlayer(guid);
+            if (delayedPlayer == nullptr)
+                return;
+            DiscordChat->AutoJoinPlayerToChannel(delayedPlayer);
+        }, 3s);
     }
 
     void OnPlayerLogout(Player* player) override

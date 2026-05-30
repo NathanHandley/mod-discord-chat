@@ -165,6 +165,11 @@ void DiscordChatMod::AutoJoinPlayerToChannel(Player* player)
     if (channel == nullptr)
         return;
 
+    // Force a fresh join. LeaveChannel is a no-op if the player isn't on the
+    // channel, so an unconditional leave-then-join refreshes the client's
+    // channel-tab registration (Channel::JoinChannel short-circuits when the
+    // player is already a member and never re-sends SMSG_CHANNEL_NOTIFY).
+    channel->LeaveChannel(player, true);
     channel->JoinChannel(player, ConfigInGameChannelPassword);
     JoinedPlayerGUIDs.insert(player->GetGUID());
 }
@@ -661,16 +666,14 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
 
 void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage const& inbound)
 {
-    if (ConfigInGameChannelName.empty() == true)
-        return;
-
-    // Compose a single visible line: "[discord] author: message"
+    // Compose a single visible line. We deliberately do NOT route Discord
+    // messages through CHAT_MSG_CHANNEL: that packet relies on the client
+    // having allocated a channel slot and on a real player senderGUID, neither
+    // of which holds for messages originating outside the game. CHAT_MSG_SYSTEM
+    // renders unconditionally in every player's default chat tab and is
+    // visually styled as a server announcement, which fits the bridge usage.
     string display = "[" + ConfigServerName + " <- Discord] " + inbound.AuthorName + ": " + inbound.Message;
 
-    // Iterate every joined player guid we know about and send a CHAT_MSG_CHANNEL packet
-    // built as if it originated from an anonymous server entity. We cannot use
-    // Channel::Say (it requires a member guid) and SendToAll is private, so we
-    // hand-build a packet per member.
     for (auto it = JoinedPlayerGUIDs.begin(); it != JoinedPlayerGUIDs.end(); )
     {
         Player* player = ObjectAccessor::FindConnectedPlayer(*it);
@@ -683,17 +686,12 @@ void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage 
         WorldPacket data;
         ChatHandler::BuildChatPacket(
             data,
-            CHAT_MSG_CHANNEL,
+            CHAT_MSG_SYSTEM,
             LANG_UNIVERSAL,
             ObjectGuid::Empty,
             ObjectGuid::Empty,
             display,
-            0,
-            "",
-            "",
-            0,
-            false,
-            ConfigInGameChannelName);
+            0);
         player->GetSession()->SendPacket(&data);
         ++it;
     }
