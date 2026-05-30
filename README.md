@@ -18,6 +18,63 @@ Copy `conf/DiscordChat.conf.dist` to `conf/DiscordChat.conf` and edit. Important
 
 See the comments in `DiscordChat.conf.dist` for the full list and defaults.
 
+## Discord setup
+
+The bridge has two halves: a webhook for in-game → Discord, and a bot for Discord → in-game.
+
+### 1. Outbound (in-game → Discord): create a webhook
+
+You only need a webhook for the "messages typed in-game show up in Discord" direction.
+
+1. In Discord, open the target server → right-click the target channel → **Edit Channel**.
+2. Go to **Integrations** → **Webhooks** → **New Webhook**.
+3. (Optional) Give it a name/avatar — these are overridden per-message by `DiscordChat.Discord.WebhookUsername` anyway.
+4. Click **Copy Webhook URL**. It will look like:
+   `https://discord.com/api/webhooks/123456789012345678/aBcDeF...`
+5. Paste it into `DiscordChat.Discord.WebhookUrl` in `DiscordChat.conf`.
+
+No bot is needed for this direction. Webhooks are append-only and can't read messages, which is why you also need a bot for the other direction.
+
+### 2. Inbound (Discord → in-game): create a bot
+
+1. Go to https://discord.com/developers/applications → **New Application** → name it (e.g. "AzerothCore Bridge").
+2. In the left sidebar, click **Bot** → **Reset Token** → **Copy**. Paste this into `DiscordChat.Discord.BotToken`.
+3. Still on the **Bot** page, under **Privileged Gateway Intents**, enable **Message Content Intent**. (Required to read message text via the REST API.)
+4. In the sidebar click **OAuth2** → **URL Generator**:
+   - **Scopes**: check `bot`.
+   - **Bot Permissions**: check `View Channel` and `Read Message History`.
+   - Copy the generated URL at the bottom, open it in a browser, choose your Discord server, and **Authorize**.
+5. Get the **channel ID**: in Discord, **User Settings → Advanced → Developer Mode = ON**. Then right-click the bridge channel → **Copy Channel ID**. Paste this into `DiscordChat.Discord.ChannelId`.
+
+### 3. Wire it together
+
+Edit `conf/DiscordChat.conf` (copy from `DiscordChat.conf.dist` if you haven't already):
+
+```
+DiscordChat.Discord.WebhookUrl = "https://discord.com/api/webhooks/..."
+DiscordChat.Discord.BotToken   = "MTE..."
+DiscordChat.Discord.ChannelId  = "123456789012345678"
+```
+
+The webhook URL and the bot's channel ID should point at the **same** Discord channel so the bridge is symmetric.
+
+### 4. Quick sanity check
+
+After restarting worldserver:
+
+- Log in a character → you should be auto-joined to the `discord` channel (`/chat list` or open the chat channels pane).
+- Type something there → it appears in Discord as `**[AzerothCore] YourName**: hello`.
+- Type something in the Discord channel from a real user account → within `PollIntervalInMS` (default 5 s) it appears in-game as `[AzerothCore <- Discord] DiscordUser: hello`.
+
+The bot's own webhook posts are filtered out by the `"bot": true` check in `ExtractDiscordMessages`, so you won't get an echo loop.
+
+### Gotchas
+
+- **Rate limits**: Discord allows ~50 requests/second per bot. The default 5000 ms polling is well under that even on busy servers; keep it ≥ 2000 ms.
+- **First poll is silent**: the worker establishes a baseline `LastSeenDiscordMessageId` on the first poll and only forwards messages that arrive *after* the server started — so you won't get a flood of channel history on boot.
+- **Webhook vs bot identity**: messages posted by the webhook appear from your webhook's name/avatar (not the bot's), which is why the bot doesn't need `Send Messages` permission — only read permissions.
+- **TLS verification**: the included HTTPS client currently uses `ssl::verify_none` to dodge CA-path quirks on first build. Once you confirm it works, flip it to `ssl::verify_peer` in `DiscordChat.cpp` for production.
+
 ## How it works
 
 - A `WorldScript` loads config at startup and spins up a background worker thread.
