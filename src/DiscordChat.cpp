@@ -37,7 +37,7 @@ DiscordChatMod::DiscordChatMod() :
     ConfigServerName("AzerothCore"),
     ConfigInGameChannelName("discord"),
     ConfigInGameChannelPassword(""),
-    ConfigAutoJoinChannelOnLogin(true),
+    ConfigAutoJoinChannelOnLogin(false),
     ConfigDiscordApiBaseUrl("https://discord.com/api/v10"),
     ConfigDiscordWebhookUrl(""),
     ConfigDiscordBotToken(""),
@@ -68,7 +68,7 @@ void DiscordChatMod::LoadConfigurationFile()
     ConfigServerName = sConfigMgr->GetOption<string>("DiscordChat.ServerName", "AzerothCore");
     ConfigInGameChannelName = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelName", "discord");
     ConfigInGameChannelPassword = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelPassword", "");
-    ConfigAutoJoinChannelOnLogin = sConfigMgr->GetOption<bool>("DiscordChat.InGame.AutoJoinOnLogin", true);
+    ConfigAutoJoinChannelOnLogin = sConfigMgr->GetOption<bool>("DiscordChat.InGame.AutoJoinOnLogin", false);
 
     ConfigDiscordApiBaseUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.ApiBaseUrl", "https://discord.com/api/v10");
     ConfigDiscordWebhookUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.WebhookUrl", "");

@@ -36,14 +36,22 @@ DiscordChat.ServerName = "AzerothCore"
 #
 #   DiscordChat.InGame.AutoJoinOnLogin
 #       If True, every player is silently joined to the bridge channel when they
-#       log in. Set to False to require players to /join manually.
-#   Default: True
+#       log in. NOTE: the WoW 3.3.5a client does not allocate a chat-tab slot
+#       for server-initiated channel joins, which means the channel will not be
+#       usable for chat input (typing /N to switch to it won't work) even
+#       though the player is on the channel server-side. The default is False
+#       and the recommended workflow is for each player to type `/join <name>`
+#       themselves once -- a manual join goes through the normal client UI
+#       path, allocates a tab slot, and persists across logins. The
+#       `.discord <message>` chat command provides a no-channel alternative for
+#       sending to Discord regardless of this setting.
+#   Default: False
 #
 ###################################################################################################
 
 DiscordChat.InGame.ChannelName = "discord"
 DiscordChat.InGame.ChannelPassword = ""
-DiscordChat.InGame.AutoJoinOnLogin = 1
+DiscordChat.InGame.AutoJoinOnLogin = 0
 
 ###################################################################################################
 #
