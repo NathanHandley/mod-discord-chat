@@ -75,6 +75,14 @@ void DiscordChatMod::LoadConfigurationFile()
     ConfigDiscordBotToken = sConfigMgr->GetOption<string>("DiscordChat.Discord.BotToken", "");
     ConfigDiscordChannelId = sConfigMgr->GetOption<string>("DiscordChat.Discord.ChannelId", "");
     ConfigDiscordWebhookUsername = sConfigMgr->GetOption<string>("DiscordChat.Discord.WebhookUsername", ConfigServerName);
+    // GetOption returns "" if the key is present-but-empty in the conf, which
+    // overrides the default. Discord rejects webhook posts whose username is
+    // empty / contains "discord" / "clyde" / "everyone" with HTTP 400, so apply
+    // a usable fallback here.
+    if (ConfigDiscordWebhookUsername.empty() == true)
+        ConfigDiscordWebhookUsername = ConfigServerName;
+    if (ConfigDiscordWebhookUsername.empty() == true)
+        ConfigDiscordWebhookUsername = "AzerothCore";
     ConfigDiscordOutgoingEnabled = sConfigMgr->GetOption<bool>("DiscordChat.Discord.OutgoingEnabled", true);
     ConfigDiscordIncomingEnabled = sConfigMgr->GetOption<bool>("DiscordChat.Discord.IncomingEnabled", true);
     ConfigDiscordPollIntervalInMS = sConfigMgr->GetOption<uint32>("DiscordChat.Discord.PollIntervalInMS", 5000);
@@ -343,7 +351,7 @@ bool DiscordChatMod::HttpPostJson(string const& url, string const& jsonBody, str
 
         if (status < 200 || status >= 300)
         {
-            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpPostJson got status {} from {}", status, url);
+            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpPostJson got status {} from {} -- body: {} -- request: {}", status, url, responseOut, jsonBody);
             return false;
         }
         return true;
@@ -416,7 +424,7 @@ bool DiscordChatMod::HttpGetJson(string const& url, string const& bearerToken, s
 
         if (status < 200 || status >= 300)
         {
-            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpGetJson got status {} from {}", status, url);
+            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpGetJson got status {} from {} -- body: {}", status, url, responseOut);
             return false;
         }
         return true;
