@@ -42,8 +42,6 @@ public:
     // Configs (from server file)
     string ConfigServerName;
     string ConfigInGameChannelName;
-    string ConfigInGameChannelPassword;
-    bool   ConfigAutoJoinChannelOnLogin;
 
     string ConfigDiscordApiBaseUrl;
     string ConfigDiscordWebhookUrl;

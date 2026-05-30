@@ -19,8 +19,6 @@ public:
     {
         if (DiscordChat->IsEnabled == false)
             return;
-        if (DiscordChat->ConfigAutoJoinChannelOnLogin == false)
-            return;
         if (player == nullptr)
             return;
 
@@ -29,13 +27,10 @@ public:
         // never allocates a channel slot, /N switching is broken, and any
         // CHAT_MSG_CHANNEL traffic addressed to that channel is dropped.
         ObjectGuid guid = player->GetGUID();
-        player->m_Events.AddEventAtOffset([guid]()
-        {
-            Player* delayedPlayer = ObjectAccessor::FindConnectedPlayer(guid);
-            if (delayedPlayer == nullptr)
-                return;
-            DiscordChat->AutoJoinPlayerToChannel(delayedPlayer);
-        }, 3s);
+        Player* delayedPlayer = ObjectAccessor::FindConnectedPlayer(guid);
+        if (delayedPlayer == nullptr)
+            return;
+        DiscordChat->AutoJoinPlayerToChannel(delayedPlayer);
     }
 
     void OnPlayerLogout(Player* player) override

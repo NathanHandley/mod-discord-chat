@@ -36,8 +36,6 @@ DiscordChatMod::DiscordChatMod() :
     IsEnabled(true),
     ConfigServerName("AzerothCore"),
     ConfigInGameChannelName("discord"),
-    ConfigInGameChannelPassword(""),
-    ConfigAutoJoinChannelOnLogin(false),
     ConfigDiscordApiBaseUrl("https://discord.com/api/v10"),
     ConfigDiscordWebhookUrl(""),
     ConfigDiscordBotToken(""),
@@ -67,8 +65,6 @@ void DiscordChatMod::LoadConfigurationFile()
 
     ConfigServerName = sConfigMgr->GetOption<string>("DiscordChat.ServerName", "AzerothCore");
     ConfigInGameChannelName = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelName", "discord");
-    ConfigInGameChannelPassword = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelPassword", "");
-    ConfigAutoJoinChannelOnLogin = sConfigMgr->GetOption<bool>("DiscordChat.InGame.AutoJoinOnLogin", false);
 
     ConfigDiscordApiBaseUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.ApiBaseUrl", "https://discord.com/api/v10");
     ConfigDiscordWebhookUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.WebhookUrl", "");
@@ -165,20 +161,6 @@ void DiscordChatMod::AutoJoinPlayerToChannel(Player* player)
     if (ConfigInGameChannelName.empty() == true)
         return;
 
-    ChannelMgr* channelMgr = ChannelMgr::forTeam(player->GetTeamId());
-    if (channelMgr == nullptr)
-        return;
-
-    Channel* channel = channelMgr->GetJoinChannel(ConfigInGameChannelName, 0);
-    if (channel == nullptr)
-        return;
-
-    // Force a fresh join. LeaveChannel is a no-op if the player isn't on the
-    // channel, so an unconditional leave-then-join refreshes the client's
-    // channel-tab registration (Channel::JoinChannel short-circuits when the
-    // player is already a member and never re-sends SMSG_CHANNEL_NOTIFY).
-    channel->LeaveChannel(player, true);
-    channel->JoinChannel(player, ConfigInGameChannelPassword);
     JoinedPlayerGUIDs.insert(player->GetGUID());
 }
 
