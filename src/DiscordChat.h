@@ -42,6 +42,8 @@ public:
     // Configs (from server file)
     string ConfigServerName;
     string ConfigInGameChannelName;
+    uint32 ConfigSpeakerCharacterGUID;
+    ObjectGuid ConfigSpeakerCharacterObjectGuid;
 
     string ConfigDiscordApiBaseUrl;
     string ConfigDiscordWebhookUrl;
@@ -75,9 +77,12 @@ public:
     // Inbound: Discord -> in-game (called from world thread via OnUpdate)
     void BroadcastPendingInboundMessages();
 
-    // Channel join helpers
-    void AutoJoinPlayerToChannel(Player* player);
-    void LeavePlayerFromChannel(Player* player);
+    // Channel membership tracking. AzerothCore has no OnJoinChannel /
+    // OnLeaveChannel script hook in 3.3.5a, so we maintain our own set of
+    // bridge-channel members. A player is tracked the first time they chat in
+    // the bridge channel (via OnPlayerCanUseChat) and untracked on logout.
+    void TrackPlayerInChannel(Player* player);
+    void UntrackPlayer(Player* player);
     Channel* GetServerChannel(Player* contextPlayer);
 
 private:

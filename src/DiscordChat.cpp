@@ -36,6 +36,8 @@ DiscordChatMod::DiscordChatMod() :
     IsEnabled(true),
     ConfigServerName("AzerothCore"),
     ConfigInGameChannelName("discord"),
+    ConfigSpeakerCharacterGUID(0),
+    ConfigSpeakerCharacterObjectGuid(ObjectGuid::Empty),
     ConfigDiscordApiBaseUrl("https://discord.com/api/v10"),
     ConfigDiscordWebhookUrl(""),
     ConfigDiscordBotToken(""),
@@ -65,6 +67,22 @@ void DiscordChatMod::LoadConfigurationFile()
 
     ConfigServerName = sConfigMgr->GetOption<string>("DiscordChat.ServerName", "AzerothCore");
     ConfigInGameChannelName = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelName", "discord");
+
+    ConfigSpeakerCharacterGUID = sConfigMgr->GetOption<uint32>("DiscordChat.InGame.SpeakerCharacterGUID", 0);
+    ConfigSpeakerCharacterObjectGuid = ObjectGuid::Empty;
+    if (ConfigSpeakerCharacterGUID != 0)
+    {
+        QueryResult queryResult = CharacterDatabase.Query("SELECT `guid` FROM `characters` WHERE `guid` = {}", ConfigSpeakerCharacterGUID);
+        if (!queryResult || queryResult->GetRowCount() == 0)
+        {
+            LOG_ERROR("module.DiscordChat", "DiscordChatMod::LoadConfigurationFile could not find character with GUID {} for DiscordChat.InGame.SpeakerCharacterGUID. Inbound messages will only be delivered as system messages.", ConfigSpeakerCharacterGUID);
+            ConfigSpeakerCharacterGUID = 0;
+        }
+        else
+        {
+            ConfigSpeakerCharacterObjectGuid = ObjectGuid::Create<HighGuid::Player>(ConfigSpeakerCharacterGUID);
+        }
+    }
 
     ConfigDiscordApiBaseUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.ApiBaseUrl", "https://discord.com/api/v10");
     ConfigDiscordWebhookUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.WebhookUrl", "");
@@ -152,7 +170,7 @@ void DiscordChatMod::BroadcastPendingInboundMessages()
         BroadcastInboundMessageToChannel(inbound);
 }
 
-void DiscordChatMod::AutoJoinPlayerToChannel(Player* player)
+void DiscordChatMod::TrackPlayerInChannel(Player* player)
 {
     if (IsEnabled == false)
         return;
@@ -164,7 +182,7 @@ void DiscordChatMod::AutoJoinPlayerToChannel(Player* player)
     JoinedPlayerGUIDs.insert(player->GetGUID());
 }
 
-void DiscordChatMod::LeavePlayerFromChannel(Player* player)
+void DiscordChatMod::UntrackPlayer(Player* player)
 {
     if (player == nullptr)
         return;
@@ -656,33 +674,56 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
 
 void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage const& inbound)
 {
-    // Compose a single visible line. We deliberately do NOT route Discord
-    // messages through CHAT_MSG_CHANNEL: that packet relies on the client
-    // having allocated a channel slot and on a real player senderGUID, neither
-    // of which holds for messages originating outside the game. CHAT_MSG_SYSTEM
-    // renders unconditionally in every player's default chat tab and is
-    // visually styled as a server announcement, which fits the bridge usage.
-    string display = "[" + ConfigServerName + " <- Discord] " + inbound.AuthorName + ": " + inbound.Message;
+    string display = "[Discord] " + inbound.AuthorName + ": " + inbound.Message;
+    string systemDisplay = "[" + ConfigServerName + " <- Discord] " + inbound.AuthorName + ": " + inbound.Message;
 
-    for (auto it = JoinedPlayerGUIDs.begin(); it != JoinedPlayerGUIDs.end(); )
+    // Channel-scoped delivery (CHAT_MSG_CHANNEL) requires the speaker to be a
+    // real character GUID. If no speaker is configured we fall back to system
+    // messages for every player so messages still get through.
+    bool channelDeliveryAvailable = ConfigSpeakerCharacterObjectGuid != ObjectGuid::Empty
+                                    && ConfigInGameChannelName.empty() == false;
+
+    ChatHandler(nullptr).DoForAllValidSessions([&](Player* player)
     {
-        Player* player = ObjectAccessor::FindConnectedPlayer(*it);
         if (player == nullptr || player->GetSession() == nullptr)
-        {
-            it = JoinedPlayerGUIDs.erase(it);
-            continue;
-        }
+            return;
+
+        bool isInBridgeChannel = JoinedPlayerGUIDs.find(player->GetGUID()) != JoinedPlayerGUIDs.end();
 
         WorldPacket data;
-        ChatHandler::BuildChatPacket(
-            data,
-            CHAT_MSG_SYSTEM,
-            LANG_UNIVERSAL,
-            ObjectGuid::Empty,
-            ObjectGuid::Empty,
-            display,
-            0);
+        if (isInBridgeChannel == true && channelDeliveryAvailable == true)
+        {
+            // Members of the bridge channel see the message as a normal channel
+            // chat line attributed to the configured speaker character. The
+            // client resolves the senderGUID via SMSG_NAME_QUERY so the speaker
+            // appears with their real character name.
+            ChatHandler::BuildChatPacket(
+                data,
+                CHAT_MSG_CHANNEL,
+                LANG_UNIVERSAL,
+                ConfigSpeakerCharacterObjectGuid,
+                ConfigSpeakerCharacterObjectGuid,
+                display,
+                0,
+                "",
+                "",
+                0,
+                false,
+                ConfigInGameChannelName);
+        }
+        else
+        {
+            // Everyone else gets a system message so the bridge still reaches
+            // players who haven't joined the channel.
+            ChatHandler::BuildChatPacket(
+                data,
+                CHAT_MSG_SYSTEM,
+                LANG_UNIVERSAL,
+                ObjectGuid::Empty,
+                ObjectGuid::Empty,
+                systemDisplay,
+                0);
+        }
         player->GetSession()->SendPacket(&data);
-        ++it;
-    }
+    });
 }

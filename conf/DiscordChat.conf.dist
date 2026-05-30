@@ -25,14 +25,29 @@ DiscordChat.ServerName = "AzerothCore"
 ###################################################################################################
 #
 #   DiscordChat.InGame.ChannelName
-#       Name of the in-game chat channel that bridges to Discord. Players are
-#       auto-joined to this channel on login (see AutoJoinOnLogin below). Any
-#       chat sent in this channel is forwarded to Discord.
+#       Name of the in-game chat channel that bridges to Discord. Players must
+#       /join this channel themselves (it is not auto-joined on login). Any
+#       chat sent in this channel is forwarded to Discord, and Discord messages
+#       are delivered to channel members through this channel.
 #   Default: "discord"
+#
+#   DiscordChat.InGame.SpeakerCharacterGUID
+#       Character GUID (from `characters`.`guid` in the characters database)
+#       used as the in-game speaker for messages received from Discord. When a
+#       player who has joined the bridge channel sees a Discord message, the
+#       chat line is attributed to this character in the channel tab; the
+#       character does not need to be online.
+#       A GUID of 0 disables channel-scoped delivery -- inbound Discord
+#       messages then fall back to system messages for every player, even those
+#       in the bridge channel.
+#       Important: Do not use a bot character (such as playerbot bots) or it
+#       will likely crash the server.
+#   Default: 0
 #
 ###################################################################################################
 
 DiscordChat.InGame.ChannelName = "discord"
+DiscordChat.InGame.SpeakerCharacterGUID = 0
 
 ###################################################################################################
 #
