@@ -1,0 +1,116 @@
+[worldserver]
+
+###################################################################################################
+#
+#   DiscordChat.Enabled
+#       Enable/disables the mod as a whole, overriding any other property or setting.
+#   Default: True (enabled)
+#
+###################################################################################################
+
+DiscordChat.Enabled = True
+
+###################################################################################################
+#
+#   DiscordChat.ServerName
+#       Friendly name of this server, prepended to messages forwarded to Discord
+#       and to messages received from Discord so chatters can see which realm a
+#       message belongs to.
+#   Default: "AzerothCore"
+#
+###################################################################################################
+
+DiscordChat.ServerName = "AzerothCore"
+
+###################################################################################################
+#
+#   DiscordChat.InGame.ChannelName
+#       Name of the in-game chat channel that bridges to Discord. Players are
+#       auto-joined to this channel on login (see AutoJoinOnLogin below). Any
+#       chat sent in this channel is forwarded to Discord.
+#   Default: "discord"
+#
+#   DiscordChat.InGame.ChannelPassword
+#       Optional channel password. Leave empty for an unprotected channel.
+#   Default: ""
+#
+#   DiscordChat.InGame.AutoJoinOnLogin
+#       If True, every player is silently joined to the bridge channel when they
+#       log in. Set to False to require players to /join manually.
+#   Default: True
+#
+###################################################################################################
+
+DiscordChat.InGame.ChannelName = "discord"
+DiscordChat.InGame.ChannelPassword = ""
+DiscordChat.InGame.AutoJoinOnLogin = 1
+
+###################################################################################################
+#
+#   DiscordChat.Discord.ApiBaseUrl
+#       Base URL of the Discord REST API. The default points at the stable v10
+#       endpoint; only change this if you are routing through a proxy or testing
+#       against an alternate API.
+#   Default: "https://discord.com/api/v10"
+#
+#   DiscordChat.Discord.WebhookUrl
+#       Full URL of the Discord webhook used to post in-game chat *to* Discord.
+#       Create one in your Discord server: Channel Settings -> Integrations ->
+#       Webhooks -> New Webhook -> Copy Webhook URL.
+#       Required when DiscordChat.Discord.OutgoingEnabled is True.
+#   Default: ""
+#
+#   DiscordChat.Discord.BotToken
+#       Bot token used to authenticate Discord REST polling for incoming
+#       messages. Obtain from the Discord Developer Portal under your bot
+#       application's "Bot" tab. The bot must be invited to the target server
+#       and granted "View Channel" + "Read Message History" permissions on the
+#       bridge channel.
+#       Required when DiscordChat.Discord.IncomingEnabled is True.
+#   Default: ""
+#
+#   DiscordChat.Discord.ChannelId
+#       Numeric Discord channel ID that the bot will read messages from. Enable
+#       Developer Mode in Discord (Settings -> Advanced) then right-click the
+#       channel and choose "Copy Channel ID".
+#       Required when DiscordChat.Discord.IncomingEnabled is True.
+#   Default: ""
+#
+#   DiscordChat.Discord.WebhookUsername
+#       Display name shown next to the messages this server posts to Discord.
+#       Defaults to the configured ServerName.
+#   Default: "" (uses ServerName)
+#
+#   DiscordChat.Discord.OutgoingEnabled
+#       If True, in-game chat sent in the bridge channel is forwarded to Discord
+#       via the webhook URL. Set False to make the bridge read-only from
+#       Discord's perspective.
+#   Default: True
+#
+#   DiscordChat.Discord.IncomingEnabled
+#       If True, the mod polls the Discord REST API on PollIntervalInMS and
+#       broadcasts new messages into the in-game bridge channel. Set False to
+#       make the bridge write-only.
+#   Default: True
+#
+#   DiscordChat.Discord.PollIntervalInMS
+#       How often (in milliseconds) the background worker polls Discord for new
+#       messages. Discord enforces a rate limit of roughly 50 requests per
+#       second per bot; keep this >= 2000 to be safe in busy environments.
+#   Default: 5000
+#
+#   DiscordChat.Discord.HttpTimeoutInMS
+#       Connect / read timeout for individual HTTPS requests to Discord.
+#   Default: 10000
+#
+###################################################################################################
+
+DiscordChat.Discord.ApiBaseUrl = "https://discord.com/api/v10"
+DiscordChat.Discord.WebhookUrl = ""
+DiscordChat.Discord.BotToken = ""
+DiscordChat.Discord.ChannelId = ""
+DiscordChat.Discord.WebhookUsername = ""
+DiscordChat.Discord.OutgoingEnabled = 1
+DiscordChat.Discord.IncomingEnabled = 1
+DiscordChat.Discord.PollIntervalInMS = 5000
+DiscordChat.Discord.HttpTimeoutInMS = 10000
