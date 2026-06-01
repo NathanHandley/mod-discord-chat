@@ -12,8 +12,6 @@ Inbound messages from Discord are delivered two different ways depending on the 
 - **Players who have joined the bridge channel** see the message as a normal channel chat line, attributed in-game to a configured "speaker" character (see `DiscordChat.InGame.SpeakerCharacterGUID`).
 - **Players who have not joined the bridge channel** see the message as a system message in their default chat tab, so they still get the content without having to opt in to the channel.
 
-A background worker thread polls the Discord REST API on a configurable interval to pick up inbound messages.
-
 ## Configuration
 
 Copy `conf/DiscordChat.conf.dist` to `conf/DiscordChat.conf` and edit. Important values:
@@ -92,32 +90,13 @@ After restarting worldserver:
   - if you have joined the bridge channel, the message shows up in the channel tab as `[Discord] DiscordUser: hello`, attributed to the configured speaker character;
   - if you haven't, it shows up as a system message in your default tab as `[YourServer <- Discord] DiscordUser: hello`.
 
-The bot's own webhook posts are filtered out by the `"bot": true` check in `ExtractDiscordMessages`, so you won't get an echo loop.
-
 ### Why players have to /join manually
 
-The WoW 3.3.5a client only allocates a chat-tab slot for a channel when *the client itself* sends `CMSG_JOIN_CHANNEL` (i.e., when the user types `/join`). Server-initiated joins via `Channel::JoinChannel` register the player on the channel server-side and deliver the `SMSG_CHANNEL_NOTIFY` packet, but the client's chat UI doesn't add the channel to its switchable tab list — so `/N` shortcuts don't reach it and the channel isn't visible in the chat tab. This is a fundamental client limitation, not something the mod can paper over.
-
-The supported workflows are therefore:
-
-- **`/join <ChannelName>` manually, once.** This goes through the normal client UI path, allocates a tab slot, and the client persists the membership across logins.
-- **`.discord <message>`** for one-off sends without ever joining a channel.
-
-A player is considered "in the bridge channel" by the mod the first time they actually chat in it (the `OnPlayerCanUseChat` hook is the only signal AzerothCore exposes for this in 3.3.5a). Until they send their first message there, inbound Discord messages will arrive as system messages; after that, they will arrive through the channel itself.
+The WoW 3.3.5a client only allocates a chat-tab slot for a channel when *the client itself* sends `CMSG_JOIN_CHANNEL` (i.e., when the user types `/join`). Server-initiated joins via `Channel::JoinChannel` register the player on the channel server-side and deliver the `SMSG_CHANNEL_NOTIFY` packet, but the client's chat UI doesn't add the channel to its switchable tab list — so `/N` shortcuts don't reach it and the channel isn't visible in the chat tab.
 
 ### Gotchas
 
 - **Rate limits**: Discord allows ~50 requests/second per bot. The default 5000 ms polling is well under that even on busy servers; keep it ≥ 2000 ms.
 - **First poll is silent**: the worker establishes a baseline `LastSeenDiscordMessageId` on the first poll and only forwards messages that arrive *after* the server started — so you won't get a flood of channel history on boot.
 - **Webhook vs bot identity**: messages posted by the webhook appear from your webhook's name/avatar (not the bot's), which is why the bot doesn't need `Send Messages` permission — only read permissions.
-- **TLS verification**: the included HTTPS client currently uses `ssl::verify_none` to dodge CA-path quirks on first build. Once you confirm it works, flip it to `ssl::verify_peer` in `DiscordChat.cpp` for production.
 - **Empty webhook username**: Discord rejects webhook POSTs whose `username` is empty (HTTP 400). The mod falls back to `ServerName` if the conf has `WebhookUsername = ""`.
-
-## How it works
-
-- A `WorldScript` loads config at startup and spins up a background worker thread.
-- A `PlayerScript` captures messages a player types in the bridge channel via the `OnPlayerCanUseChat` hook, pushes them onto an outbound queue, and tracks the player as a member of the bridge channel so future inbound Discord messages reach them via the channel rather than as system messages.
-- A `CommandScript` registers `.discord` / `.d` so any player can push a message to Discord without joining the channel.
-- The worker thread POSTs queued outbound messages to the Discord webhook over HTTPS (Boost.Beast + OpenSSL).
-- The same worker thread polls `GET /channels/{id}/messages` on the configured interval, filters out the bot's own posts, and pushes inbound messages onto an inbound queue.
-- The world tick drains the inbound queue and, for each in-world player, sends either a `CHAT_MSG_CHANNEL` packet (if the player is a tracked channel member and `SpeakerCharacterGUID` is set) or a `CHAT_MSG_SYSTEM` packet (otherwise).
