@@ -117,6 +117,10 @@ private:
     static string JsonEscape(string const& value);
     static bool IsWowSafeDisplayName(string const& value);
     static bool ExtractDiscordMessages(string const& json, vector<DiscordChatInboundMessage>& outMessages, string& outNewestId);
+    // Builds a short, ASCII-safe placeholder (e.g. "[image: cat.png]") for any
+    // non-text content (file attachments, stickers) carried by a single Discord
+    // message object. Returns "" when the message has no such media.
+    static string SummarizeMessageMedia(string const& messageObjectJson);
     void BroadcastInboundMessageToChannel(DiscordChatInboundMessage const& inbound);
 
     // Send the "please /join the bridge channel" system message to one player

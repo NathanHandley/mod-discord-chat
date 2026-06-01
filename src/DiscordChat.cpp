@@ -696,6 +696,45 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
             return false;
         };
 
+    // Like findStringField, but only matches a key at the immediate top level of
+    // the object (brace/bracket depth 1). A message's own "id"/"content" must not
+    // be confused with the same key nested inside "attachments" or "author": an
+    // attachment's "id" is a different (and smaller) snowflake than the message
+    // id, and grabbing it would stall the poll cursor and refetch the message
+    // every interval.
+    auto findTopLevelStringField = [&](string const& obj, string const& key, string& outValue) -> bool
+        {
+            string needle = "\"" + key + "\"";
+            int depth = 0;
+            bool inString = false;
+            for (size_t p = 0; p < obj.size(); ++p)
+            {
+                char c = obj[p];
+                if (inString == true)
+                {
+                    if (c == '\\' && p + 1 < obj.size()) { p++; continue; }
+                    if (c == '"') inString = false;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    if (depth == 1 && obj.compare(p, needle.size(), needle) == 0)
+                    {
+                        size_t colon = p + needle.size();
+                        while (colon < obj.size() && (obj[colon] == ' ' || obj[colon] == '\t'))
+                            colon++;
+                        if (colon < obj.size() && obj[colon] == ':')
+                            return findStringField(obj.substr(p), key, outValue);
+                    }
+                    inString = true;
+                    continue;
+                }
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']') depth--;
+            }
+            return false;
+        };
+
     // Walk top-level array, slicing each balanced { ... } member
     size_t i = json.find('[');
     if (i == string::npos)
@@ -741,11 +780,13 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
         string obj = json.substr(start, j - start);
         i = j;
 
-        // Extract id, content, author block
+        // Extract id, content, author block. These must come from the message's
+        // own top-level fields, not from nested objects such as "attachments"
+        // (whose entries also carry an "id"), so use the depth-aware finder.
         string id, content;
-        if (findStringField(obj, "id", id) == false)
+        if (findTopLevelStringField(obj, "id", id) == false)
             continue;
-        findStringField(obj, "content", content);
+        findTopLevelStringField(obj, "content", content);
 
         // Slice author sub-object
         string authorName;
@@ -806,6 +847,19 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
         if (isBot == true)
             continue;
 
+        // Surface any media (images, videos, files, stickers) the message
+        // carried. Media-only Discord posts have empty `content`, so without
+        // this they would be dropped just below and players would never see
+        // that anything was posted.
+        string mediaMarker = SummarizeMessageMedia(obj);
+        if (mediaMarker.empty() == false)
+        {
+            if (content.empty() == true)
+                content = mediaMarker;
+            else
+                content += " " + mediaMarker;
+        }
+
         if (content.empty() == true)
             continue;
 
@@ -818,6 +872,148 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
     // Discord returns newest-first; reverse so we replay in chronological order
     reverse(outMessages.begin(), outMessages.end());
     return true;
+}
+
+string DiscordChatMod::SummarizeMessageMedia(string const& messageObjectJson)
+{
+    // Reads non-text content out of a single Discord message object so it can be
+    // represented as plain text. The 3.3.5a client cannot display images,
+    // videos, files or stickers, so we emit a short placeholder like
+    // "[image: cat.png]" instead. Filenames/sticker names that the client can't
+    // render are reduced to just the kind (e.g. "[image]").
+
+    // Reads a string field directly nested in `obj` (not recursive). Good enough
+    // for the flat attachment/sticker objects we inspect here.
+    auto findString = [](string const& obj, string const& key, string& outValue) -> bool
+        {
+            string needle = "\"" + key + "\"";
+            size_t pos = obj.find(needle);
+            if (pos == string::npos)
+                return false;
+            pos = obj.find(':', pos + needle.size());
+            if (pos == string::npos)
+                return false;
+            while (pos + 1 < obj.size() && (obj[pos + 1] == ' ' || obj[pos + 1] == '\t'))
+                pos++;
+            if (pos + 1 >= obj.size() || obj[pos + 1] != '"')
+                return false;
+            size_t start = pos + 2;
+            size_t end = start;
+            while (end < obj.size())
+            {
+                if (obj[end] == '\\' && end + 1 < obj.size())
+                {
+                    end += 2;
+                    continue;
+                }
+                if (obj[end] == '"')
+                    break;
+                end++;
+            }
+            if (end >= obj.size())
+                return false;
+            outValue = obj.substr(start, end - start);
+            return true;
+        };
+
+    // Slices each balanced { ... } object out of the JSON array stored at `key`.
+    auto sliceArrayObjects = [](string const& obj, string const& key, vector<string>& out)
+        {
+            string needle = "\"" + key + "\"";
+            size_t pos = obj.find(needle);
+            if (pos == string::npos)
+                return;
+            size_t bracket = obj.find('[', pos);
+            if (bracket == string::npos)
+                return;
+            size_t i = bracket + 1;
+            while (i < obj.size())
+            {
+                while (i < obj.size() && (obj[i] == ' ' || obj[i] == '\t' || obj[i] == '\n' || obj[i] == '\r' || obj[i] == ','))
+                    i++;
+                if (i >= obj.size() || obj[i] == ']')
+                    break;
+                if (obj[i] != '{')
+                    break;
+                size_t start = i;
+                int depth = 0;
+                bool inString = false;
+                size_t j = i;
+                for (; j < obj.size(); ++j)
+                {
+                    char c = obj[j];
+                    if (inString == true)
+                    {
+                        if (c == '\\' && j + 1 < obj.size()) { j++; continue; }
+                        if (c == '"') inString = false;
+                        continue;
+                    }
+                    if (c == '"') { inString = true; continue; }
+                    if (c == '{') depth++;
+                    else if (c == '}')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            j++;
+                            break;
+                        }
+                    }
+                }
+                if (depth != 0)
+                    break;
+                out.push_back(obj.substr(start, j - start));
+                i = j;
+            }
+        };
+
+    vector<string> markers;
+
+    // File uploads: pasted/dragged images, videos, audio and other files.
+    vector<string> attachments;
+    sliceArrayObjects(messageObjectJson, "attachments", attachments);
+    for (string const& att : attachments)
+    {
+        string contentType;
+        findString(att, "content_type", contentType);
+
+        string kind = "file";
+        if (contentType.rfind("image/", 0) == 0)
+            kind = "image";
+        else if (contentType.rfind("video/", 0) == 0)
+            kind = "video";
+        else if (contentType.rfind("audio/", 0) == 0)
+            kind = "audio";
+
+        string filename;
+        findString(att, "filename", filename);
+        if (IsWowSafeDisplayName(filename) == true)
+            markers.push_back("[" + kind + ": " + filename + "]");
+        else
+            markers.push_back("[" + kind + "]");
+    }
+
+    // Stickers.
+    vector<string> stickers;
+    sliceArrayObjects(messageObjectJson, "sticker_items", stickers);
+    for (string const& st : stickers)
+    {
+        string name;
+        findString(st, "name", name);
+        if (IsWowSafeDisplayName(name) == true)
+            markers.push_back("[sticker: " + name + "]");
+        else
+            markers.push_back("[sticker]");
+    }
+
+    string out;
+    for (string const& m : markers)
+    {
+        if (out.empty() == false)
+            out += " ";
+        out += m;
+    }
+    return out;
 }
 
 void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage const& inbound)

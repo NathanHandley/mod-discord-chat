@@ -12,6 +12,8 @@ Inbound messages from Discord are delivered two different ways depending on the 
 - **Players who have joined the bridge channel** see the message as a normal channel chat line, attributed in-game to a configured "speaker" character (see `DiscordChat.InGame.SpeakerCharacterGUID`).
 - **Players who have not joined the bridge channel** see the message as a system message in their default chat tab, so they still get the content without having to opt in to the channel.
 
+Media posted in Discord (images, videos, files, ...) cannot be displayed by the 3.3.5a client so the mod delivers a short text placeholder instead like `[image: cat.png]`, `[video]`, or `[file: log.txt]`.
+		 
 ## Configuration
 
 Copy `conf/DiscordChat.conf.dist` to `conf/DiscordChat.conf` and edit. Important values:
