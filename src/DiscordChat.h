@@ -40,6 +40,7 @@ public:
     bool IsEnabled;
 
     // Configs (from server file)
+    bool ConfigDoAppendServerName;
     string ConfigServerName;
     string ConfigInGameChannelName;
     uint32 ConfigSpeakerCharacterGUID;

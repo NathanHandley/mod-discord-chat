@@ -34,6 +34,7 @@ using namespace std;
 
 DiscordChatMod::DiscordChatMod() :
     IsEnabled(true),
+    ConfigDoAppendServerName(true),
     ConfigServerName("AzerothCore"),
     ConfigInGameChannelName("discord"),
     ConfigSpeakerCharacterGUID(0),
@@ -65,6 +66,7 @@ void DiscordChatMod::LoadConfigurationFile()
         return;
     }
 
+    ConfigDoAppendServerName = sConfigMgr->GetOption<bool>("DiscordChat.DoAppendServerName", true);
     ConfigServerName = sConfigMgr->GetOption<string>("DiscordChat.ServerName", "AzerothCore");
     ConfigInGameChannelName = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelName", "discord");
 
@@ -206,6 +208,13 @@ void DiscordChatMod::WorkerLoop()
 
     while (WorkerRunning.load() == true)
     {
+        // Poll for inbound
+        if (ConfigDiscordIncomingEnabled == true && clock::now() >= nextPoll)
+        {
+            PollDiscordForMessages();
+            nextPoll = clock::now() + chrono::milliseconds(ConfigDiscordPollIntervalInMS);
+        }
+
         // Drain outbound
         deque<DiscordChatOutboundMessage> drained;
         {
@@ -222,13 +231,6 @@ void DiscordChatMod::WorkerLoop()
                 break;
             SendOutboundToDiscord(outbound);
         }
-
-        // Poll for inbound
-        if (ConfigDiscordIncomingEnabled == true && clock::now() >= nextPoll)
-        {
-            PollDiscordForMessages();
-            nextPoll = clock::now() + chrono::milliseconds(ConfigDiscordPollIntervalInMS);
-        }
     }
 }
 
@@ -237,10 +239,20 @@ void DiscordChatMod::SendOutboundToDiscord(DiscordChatOutboundMessage const& out
     if (ConfigDiscordWebhookUrl.empty() == true)
         return;
 
-    string body = "{\"username\":\"" + JsonEscape(ConfigDiscordWebhookUsername) +
-                  "\",\"content\":\"**[" + JsonEscape(ConfigServerName) + "] " +
-                  JsonEscape(outbound.AuthorName) + "**: " +
-                  JsonEscape(outbound.Message) + "\"}";
+    string body = "";
+    if (ConfigDoAppendServerName == true)
+    {
+        body = "{\"username\":\"" + JsonEscape(ConfigDiscordWebhookUsername) +
+            "\",\"content\":\"**[" + JsonEscape(ConfigServerName) + "] " +
+            JsonEscape(outbound.AuthorName) + "**: " +
+            JsonEscape(outbound.Message) + "\"}";
+    }
+    else
+    {
+        body = "{\"username\":\"" + JsonEscape(ConfigDiscordWebhookUsername) +
+            "\",\"content\":\"**[" + JsonEscape(outbound.AuthorName) + "]**: " +
+            JsonEscape(outbound.Message) + "\"}";
+    }
 
     string response;
     if (HttpPostJson(ConfigDiscordWebhookUrl, body, response) == false)
@@ -674,7 +686,7 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
 
 void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage const& inbound)
 {
-    string display = "[Discord] " + inbound.AuthorName + ": " + inbound.Message;
+    string display = inbound.AuthorName + ": " + inbound.Message;
     string systemDisplay = "[" + ConfigServerName + " <- Discord] " + inbound.AuthorName + ": " + inbound.Message;
 
     // Channel-scoped delivery (CHAT_MSG_CHANNEL) requires the speaker to be a

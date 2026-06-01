@@ -12,6 +12,10 @@ DiscordChat.Enabled = True
 
 ###################################################################################################
 #
+#   DiscordChat.DoAppendServerName
+#       If true, append the value DiscordChat.ServerName to messages sent to Discord
+#   Default: True
+#
 #   DiscordChat.ServerName
 #       Friendly name of this server, prepended to messages forwarded to Discord
 #       and to messages received from Discord so chatters can see which realm a
@@ -20,6 +24,7 @@ DiscordChat.Enabled = True
 #
 ###################################################################################################
 
+DiscordChat.DoAppendServerName = True
 DiscordChat.ServerName = "AzerothCore"
 
 ###################################################################################################

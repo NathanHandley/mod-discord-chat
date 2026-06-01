@@ -121,5 +121,3 @@ A player is considered "in the bridge channel" by the mod the first time they ac
 - The worker thread POSTs queued outbound messages to the Discord webhook over HTTPS (Boost.Beast + OpenSSL).
 - The same worker thread polls `GET /channels/{id}/messages` on the configured interval, filters out the bot's own posts, and pushes inbound messages onto an inbound queue.
 - The world tick drains the inbound queue and, for each in-world player, sends either a `CHAT_MSG_CHANNEL` packet (if the player is a tracked channel member and `SpeakerCharacterGUID` is set) or a `CHAT_MSG_SYSTEM` packet (otherwise).
-
-This module was mostly written via Claude
