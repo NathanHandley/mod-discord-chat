@@ -12,6 +12,19 @@ DiscordChat.Enabled = True
 
 ###################################################################################################
 #
+#   DiscordChat.NotifyReminderToJoinChannel
+#       If true, when a character logs in and is NOT currently a member of the
+#       bridge channel (DiscordChat.InGame.ChannelName), they are reminded a few
+#       seconds after login to /join it. Players who are already in the channel
+#       on login receive no reminder.
+#   Default: False
+#
+###################################################################################################
+
+DiscordChat.NotifyReminderToJoinChannel = True
+
+###################################################################################################
+#
 #   DiscordChat.DoAppendServerName
 #       If true, append the value DiscordChat.ServerName to messages sent to Discord
 #   Default: True

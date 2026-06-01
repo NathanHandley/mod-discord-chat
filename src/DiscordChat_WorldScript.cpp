@@ -31,6 +31,8 @@ public:
         if (DiscordChat->IsEnabled == false)
             return;
 
+        DiscordChat->ProcessPendingJoinReminders(diff);
+
         DrainAccumulatorMS += diff;
         if (DrainAccumulatorMS < 250)
             return;

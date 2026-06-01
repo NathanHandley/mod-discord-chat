@@ -21,6 +21,7 @@
 #include <boost/beast/version.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <sstream>
 
@@ -39,6 +40,7 @@ DiscordChatMod::DiscordChatMod() :
     ConfigDoAppendServerName(true),
     ConfigServerName("AzerothCore"),
     ConfigInGameChannelName("discord"),
+    ConfigNotifyReminderToJoinChannel(false),
     ConfigSpeakerCharacterGUID(0),
     ConfigSpeakerCharacterObjectGuid(ObjectGuid::Empty),
     ConfigDiscordApiBaseUrl("https://discord.com/api/v10"),
@@ -71,6 +73,7 @@ void DiscordChatMod::LoadConfigurationFile()
     ConfigDoAppendServerName = sConfigMgr->GetOption<bool>("DiscordChat.DoAppendServerName", true);
     ConfigServerName = sConfigMgr->GetOption<string>("DiscordChat.ServerName", "AzerothCore");
     ConfigInGameChannelName = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelName", "discord");
+    ConfigNotifyReminderToJoinChannel = sConfigMgr->GetOption<bool>("DiscordChat.NotifyReminderToJoinChannel", false);
 
     ConfigSpeakerCharacterGUID = sConfigMgr->GetOption<uint32>("DiscordChat.InGame.SpeakerCharacterGUID", 0);
     ConfigSpeakerCharacterObjectGuid = ObjectGuid::Empty;
@@ -192,6 +195,31 @@ void DiscordChatMod::UntrackPlayer(Player* player)
     if (player == nullptr)
         return;
     JoinedPlayerGUIDs.erase(player->GetGUID());
+    PendingJoinReminders.erase(player->GetGUID());
+}
+
+void DiscordChatMod::UntrackChannelMembership(Player* player)
+{
+    if (player == nullptr)
+        return;
+    JoinedPlayerGUIDs.erase(player->GetGUID());
+}
+
+bool DiscordChatMod::IsBridgeChannelName(string const& name) const
+{
+    // Channel names are case-insensitive in WoW, so compare accordingly.
+    if (ConfigInGameChannelName.empty() == true)
+        return false;
+    if (name.size() != ConfigInGameChannelName.size())
+        return false;
+    for (size_t i = 0; i < name.size(); ++i)
+    {
+        unsigned char a = static_cast<unsigned char>(name[i]);
+        unsigned char b = static_cast<unsigned char>(ConfigInGameChannelName[i]);
+        if (tolower(a) != tolower(b))
+            return false;
+    }
+    return true;
 }
 
 Channel* DiscordChatMod::GetServerChannel(Player* contextPlayer)
@@ -202,6 +230,54 @@ Channel* DiscordChatMod::GetServerChannel(Player* contextPlayer)
     if (channelMgr == nullptr)
         return nullptr;
     return channelMgr->GetChannel(ConfigInGameChannelName, contextPlayer, false);
+}
+
+void DiscordChatMod::QueuePendingJoinReminder(Player* player)
+{
+    if (IsEnabled == false)
+        return;
+    if (ConfigNotifyReminderToJoinChannel == false)
+        return;
+    if (player == nullptr)
+        return;
+    if (ConfigInGameChannelName.empty() == true)
+        return;
+
+    // Wait a few seconds so the client has time to re-join its saved channels
+    // before we decide whether the player still needs the reminder.
+    PendingJoinReminders[player->GetGUID()] = 5000;
+}
+
+void DiscordChatMod::ProcessPendingJoinReminders(uint32 diff)
+{
+    if (PendingJoinReminders.empty() == true)
+        return;
+
+    for (auto it = PendingJoinReminders.begin(); it != PendingJoinReminders.end(); )
+    {
+        if (it->second > diff)
+        {
+            it->second -= diff;
+            ++it;
+            continue;
+        }
+
+        ObjectGuid guid = it->first;
+        it = PendingJoinReminders.erase(it);
+
+        // Already a member of the bridge channel -> no reminder needed. The
+        // membership set is kept current by the server script's packet hook
+        // (CMSG_JOIN_CHANNEL / CMSG_LEAVE_CHANNEL), so by the time this delayed
+        // check fires it reflects any channels the client re-joined on login.
+        if (JoinedPlayerGUIDs.find(guid) != JoinedPlayerGUIDs.end())
+            continue;
+
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (player == nullptr || player->GetSession() == nullptr)
+            continue;
+
+        SendJoinReminder(player);
+    }
 }
 
 void DiscordChatMod::WorkerLoop()
@@ -798,4 +874,17 @@ void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage 
             }
             player->GetSession()->SendPacket(&data);
         });
+}
+
+void DiscordChatMod::SendJoinReminder(Player* player)
+{
+    if (player == nullptr || player->GetSession() == nullptr)
+        return;
+    if (ConfigInGameChannelName.empty() == true)
+        return;
+
+    string reminder = "Reminder: you have not joined the '" + ConfigInGameChannelName +
+        "' channel that bridges chat with Discord. Type /join " + ConfigInGameChannelName +
+        " to join it.";
+    ChatHandler(player->GetSession()).SendSysMessage(reminder);
 }

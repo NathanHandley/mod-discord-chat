@@ -15,10 +15,15 @@
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "Channel.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include "DiscordChat.h"
+
+#include <exception>
 
 using namespace std;
 
@@ -26,6 +31,15 @@ class DiscordChat_PlayerScript : public PlayerScript
 {
 public:
     DiscordChat_PlayerScript() : PlayerScript("DiscordChat_PlayerScript") {}
+
+    void OnPlayerLogin(Player* player) override
+    {
+        if (DiscordChat->IsEnabled == false)
+            return;
+        // Queue a deferred reminder; whether it actually fires depends on the
+        // player not being on the bridge channel once the delay elapses.
+        DiscordChat->QueuePendingJoinReminder(player);
+    }
 
     void OnPlayerLogout(Player* player) override
     {
@@ -54,7 +68,69 @@ public:
     }
 };
 
+// AzerothCore has no channel join/leave script hook and Channel::IsOn is
+// private, so we cannot ask the core whether a player is on the bridge channel.
+// Instead we watch the inbound channel opcodes here and maintain the mod's own
+// membership set. This is what lets the deferred login reminder tell whether a
+// player has (re)joined the channel without touching core code.
+class DiscordChat_ServerScript : public ServerScript
+{
+public:
+    DiscordChat_ServerScript() : ServerScript("DiscordChat_ServerScript") {}
+
+    bool CanPacketReceive(WorldSession* session, WorldPacket const& packet) override
+    {
+        if (DiscordChat->IsEnabled == false)
+            return true;
+        if (session == nullptr)
+            return true;
+
+        uint32 opcode = packet.GetOpcode();
+        if (opcode != CMSG_JOIN_CHANNEL && opcode != CMSG_LEAVE_CHANNEL)
+            return true;
+
+        Player* player = session->GetPlayer();
+        if (player == nullptr)
+            return true;
+
+        // Copy before reading: the original is const and must stay intact for
+        // the core's own handler, which parses it after us.
+        WorldPacket reader(packet);
+        string channelName;
+        try
+        {
+            if (opcode == CMSG_JOIN_CHANNEL)
+            {
+                uint32 channelId;
+                uint8 unk1, unk2;
+                string password;
+                reader >> channelId >> unk1 >> unk2 >> channelName >> password;
+            }
+            else
+            {
+                uint32 unk;
+                reader >> unk >> channelName;
+            }
+        }
+        catch (std::exception const&)
+        {
+            // Malformed/short packet -- let the core handler deal with it.
+            return true;
+        }
+
+        if (DiscordChat->IsBridgeChannelName(channelName) == true)
+        {
+            if (opcode == CMSG_JOIN_CHANNEL)
+                DiscordChat->TrackPlayerInChannel(player);
+            else
+                DiscordChat->UntrackChannelMembership(player);
+        }
+        return true;
+    }
+};
+
 void AddDiscordChatPlayerScripts()
 {
     new DiscordChat_PlayerScript();
+    new DiscordChat_ServerScript();
 }
