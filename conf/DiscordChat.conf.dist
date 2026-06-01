@@ -49,10 +49,18 @@ DiscordChat.ServerName = "AzerothCore"
 #       will likely crash the server.
 #   Default: 0
 #
+#   DiscordChat.InGame.UseGlobalNameIfAvailable
+#       If true, messages sent to World of Warcraft will display the display name (aka Global Name)
+#       which is the value of the user name as displayed in discord if it can find it. Otherwise
+#       it will use the actual discord username.  If the global/display name has invalid characters,
+#       those messages will fallback to the username.
+#   Default: True
+#
 ###################################################################################################
 
 DiscordChat.InGame.ChannelName = "discord"
 DiscordChat.InGame.SpeakerCharacterGUID = 0
+DiscordChat.InGame.UseGlobalNameIfAvailable = True
 
 ###################################################################################################
 #

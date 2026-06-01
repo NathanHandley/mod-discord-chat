@@ -32,6 +32,8 @@ using tcp = asio::ip::tcp;
 
 using namespace std;
 
+static bool ConfigInGameUseGlobalNameIfAvailable = true;
+
 DiscordChatMod::DiscordChatMod() :
     IsEnabled(true),
     ConfigDoAppendServerName(true),
@@ -85,6 +87,7 @@ void DiscordChatMod::LoadConfigurationFile()
             ConfigSpeakerCharacterObjectGuid = ObjectGuid::Create<HighGuid::Player>(ConfigSpeakerCharacterGUID);
         }
     }
+    ConfigInGameUseGlobalNameIfAvailable = sConfigMgr->GetOption<bool>("DiscordChat.InGame.UseGlobalNameIfAvailable", true);
 
     ConfigDiscordApiBaseUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.ApiBaseUrl", "https://discord.com/api/v10");
     ConfigDiscordWebhookUrl = sConfigMgr->GetOption<string>("DiscordChat.Discord.WebhookUrl", "");
@@ -220,9 +223,9 @@ void DiscordChatMod::WorkerLoop()
         {
             unique_lock<mutex> lock(QueueMutex);
             QueueCondVar.wait_for(lock, chrono::milliseconds(500), [this]()
-            {
-                return OutboundQueue.empty() == false || WorkerRunning.load() == false;
-            });
+                {
+                    return OutboundQueue.empty() == false || WorkerRunning.load() == false;
+                });
             drained.swap(OutboundQueue);
         }
         for (DiscordChatOutboundMessage const& outbound : drained)
@@ -341,7 +344,7 @@ bool DiscordChatMod::HttpPostJson(string const& url, string const& jsonBody, str
         beast::get_lowest_layer(stream).connect(results);
         stream.handshake(ssl::stream_base::client);
 
-        http::request<http::string_body> req{http::verb::post, target, 11};
+        http::request<http::string_body> req{ http::verb::post, target, 11 };
         req.set(http::field::host, host);
         req.set(http::field::user_agent, "AzerothCore-mod-discord-chat");
         req.set(http::field::content_type, "application/json");
@@ -416,7 +419,7 @@ bool DiscordChatMod::HttpGetJson(string const& url, string const& bearerToken, s
         beast::get_lowest_layer(stream).connect(results);
         stream.handshake(ssl::stream_base::client);
 
-        http::request<http::string_body> req{http::verb::get, target, 11};
+        http::request<http::string_body> req{ http::verb::get, target, 11 };
         req.set(http::field::host, host);
         req.set(http::field::user_agent, "AzerothCore-mod-discord-chat");
         req.set(http::field::authorization, string("Bot ") + bearerToken);
@@ -478,6 +481,51 @@ string DiscordChatMod::JsonEscape(string const& value)
     return out;
 }
 
+bool DiscordChatMod::IsWowSafeDisplayName(string const& value)
+{
+    if (value.empty() == true)
+        return false;
+
+    // Discord returns names as UTF-8. Decode and accept only code points the
+    // 3.3.5a client renders reliably: printable ASCII (U+0020-U+007E) and the
+    // printable Latin-1 supplement (U+00A0-U+00FF, accented Western European
+    // letters). Anything higher (CJK, emoji), any control character, or a
+    // malformed byte makes the whole name unusable, so the caller falls back
+    // to the always-ASCII username.
+    for (size_t i = 0; i < value.size(); )
+    {
+        unsigned char b = static_cast<unsigned char>(value[i]);
+        uint32 cp;
+        if (b < 0x80)
+        {
+            cp = b;
+            i += 1;
+        }
+        else if ((b & 0xE0) == 0xC0)
+        {
+            // 2-byte sequence -> U+0080..U+07FF; only the low half is Latin-1.
+            if (i + 1 >= value.size())
+                return false;
+            unsigned char c1 = static_cast<unsigned char>(value[i + 1]);
+            if ((c1 & 0xC0) != 0x80)
+                return false;
+            cp = ((b & 0x1F) << 6) | (c1 & 0x3F);
+            i += 2;
+        }
+        else
+        {
+            // 3- or 4-byte sequence (> U+00FF) or a stray continuation byte.
+            return false;
+        }
+
+        bool isPrintableAscii = cp >= 0x20 && cp <= 0x7E;
+        bool isPrintableLatin1 = cp >= 0xA0 && cp <= 0xFF;
+        if (isPrintableAscii == false && isPrintableLatin1 == false)
+            return false;
+    }
+    return true;
+}
+
 // Minimal extractor for Discord's GET /channels/{id}/messages response.
 // The payload is a JSON array of message objects with at least:
 //   { "id": "...", "content": "...", "author": { "username": "...", "bot": true|false } }
@@ -489,88 +537,88 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
     outNewestId.clear();
 
     auto unescape = [](string const& s) -> string
-    {
-        string out;
-        out.reserve(s.size());
-        for (size_t i = 0; i < s.size(); ++i)
         {
-            if (s[i] == '\\' && i + 1 < s.size())
+            string out;
+            out.reserve(s.size());
+            for (size_t i = 0; i < s.size(); ++i)
             {
-                char n = s[i + 1];
-                switch (n)
+                if (s[i] == '\\' && i + 1 < s.size())
                 {
-                case '"':  out += '"';  i++; break;
-                case '\\': out += '\\'; i++; break;
-                case '/':  out += '/';  i++; break;
-                case 'b':  out += '\b'; i++; break;
-                case 'f':  out += '\f'; i++; break;
-                case 'n':  out += '\n'; i++; break;
-                case 'r':  out += '\r'; i++; break;
-                case 't':  out += '\t'; i++; break;
-                case 'u':
-                    if (i + 5 < s.size())
+                    char n = s[i + 1];
+                    switch (n)
                     {
-                        // Drop unicode escapes to ASCII-printable space marker
-                        out += '?';
-                        i += 5;
+                    case '"':  out += '"';  i++; break;
+                    case '\\': out += '\\'; i++; break;
+                    case '/':  out += '/';  i++; break;
+                    case 'b':  out += '\b'; i++; break;
+                    case 'f':  out += '\f'; i++; break;
+                    case 'n':  out += '\n'; i++; break;
+                    case 'r':  out += '\r'; i++; break;
+                    case 't':  out += '\t'; i++; break;
+                    case 'u':
+                        if (i + 5 < s.size())
+                        {
+                            // Drop unicode escapes to ASCII-printable space marker
+                            out += '?';
+                            i += 5;
+                        }
+                        break;
+                    default: out += n; i++; break;
                     }
-                    break;
-                default: out += n; i++; break;
                 }
+                else
+                    out += s[i];
             }
-            else
-                out += s[i];
-        }
-        return out;
-    };
+            return out;
+        };
 
     auto findStringField = [&](string const& obj, string const& key, string& outValue) -> bool
-    {
-        string needle = "\"" + key + "\"";
-        size_t pos = obj.find(needle);
-        if (pos == string::npos)
-            return false;
-        pos = obj.find(':', pos + needle.size());
-        if (pos == string::npos)
-            return false;
-        while (pos + 1 < obj.size() && (obj[pos + 1] == ' ' || obj[pos + 1] == '\t'))
-            pos++;
-        if (pos + 1 >= obj.size() || obj[pos + 1] != '"')
-            return false;
-        size_t start = pos + 2;
-        size_t end = start;
-        while (end < obj.size())
         {
-            if (obj[end] == '\\' && end + 1 < obj.size())
+            string needle = "\"" + key + "\"";
+            size_t pos = obj.find(needle);
+            if (pos == string::npos)
+                return false;
+            pos = obj.find(':', pos + needle.size());
+            if (pos == string::npos)
+                return false;
+            while (pos + 1 < obj.size() && (obj[pos + 1] == ' ' || obj[pos + 1] == '\t'))
+                pos++;
+            if (pos + 1 >= obj.size() || obj[pos + 1] != '"')
+                return false;
+            size_t start = pos + 2;
+            size_t end = start;
+            while (end < obj.size())
             {
-                end += 2;
-                continue;
+                if (obj[end] == '\\' && end + 1 < obj.size())
+                {
+                    end += 2;
+                    continue;
+                }
+                if (obj[end] == '"')
+                    break;
+                end++;
             }
-            if (obj[end] == '"')
-                break;
-            end++;
-        }
-        if (end >= obj.size())
-            return false;
-        outValue = unescape(obj.substr(start, end - start));
-        return true;
-    };
+            if (end >= obj.size())
+                return false;
+            outValue = unescape(obj.substr(start, end - start));
+            return true;
+        };
 
     auto findBoolField = [&](string const& obj, string const& key, bool& outValue) -> bool
-    {
-        string needle = "\"" + key + "\"";
-        size_t pos = obj.find(needle);
-        if (pos == string::npos)
+        {
+            string needle = "\"" + key + "\"";
+            size_t pos = obj.find(needle);
+            if (pos == string::npos)
+                return false;
+            pos = obj.find(':', pos + needle.size());
+            if (pos == string::npos)
+                return false;
+            while (pos + 1 < obj.size() && (obj[pos + 1] == ' ' || obj[pos + 1] == '\t'))
+                pos++;
+            if (obj.compare(pos + 1, 4, "true") == 0) { outValue = true; return true; }
+            if (obj.compare(pos + 1, 5, "false") == 0) { outValue = false; return true; }
             return false;
-        pos = obj.find(':', pos + needle.size());
-        if (pos == string::npos)
-            return false;
-        while (pos + 1 < obj.size() && (obj[pos + 1] == ' ' || obj[pos + 1] == '\t'))
-            pos++;
-        if (obj.compare(pos + 1, 4, "true") == 0) { outValue = true; return true; }
-        if (obj.compare(pos + 1, 5, "false") == 0) { outValue = false; return true; }
-        return false;
-    };
+        };
 
     // Walk top-level array, slicing each balanced { ... } member
     size_t i = json.find('[');
@@ -657,7 +705,19 @@ bool DiscordChatMod::ExtractDiscordMessages(string const& json, vector<DiscordCh
                     }
                 }
                 string authorObj = obj.substr(braceStart, k - braceStart);
-                findStringField(authorObj, "username", authorName);
+
+                // Fallback when global_name is absent, null, or contains characters the 3.3.5a client cannot render (CJK, emoji, etc.; accented Latin-1 names are kept).
+                if (ConfigInGameUseGlobalNameIfAvailable == true)
+                {
+                    string globalName;
+                    if (findStringField(authorObj, "global_name", globalName) == true
+                        && IsWowSafeDisplayName(globalName) == true)
+                        authorName = globalName;
+                    else
+                        findStringField(authorObj, "username", authorName);
+                }
+                else
+                    findStringField(authorObj, "username", authorName);
                 findBoolField(authorObj, "bot", isBot);
             }
         }
@@ -693,49 +753,49 @@ void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage 
     // real character GUID. If no speaker is configured we fall back to system
     // messages for every player so messages still get through.
     bool channelDeliveryAvailable = ConfigSpeakerCharacterObjectGuid != ObjectGuid::Empty
-                                    && ConfigInGameChannelName.empty() == false;
+        && ConfigInGameChannelName.empty() == false;
 
     ChatHandler(nullptr).DoForAllValidSessions([&](Player* player)
-    {
-        if (player == nullptr || player->GetSession() == nullptr)
-            return;
-
-        bool isInBridgeChannel = JoinedPlayerGUIDs.find(player->GetGUID()) != JoinedPlayerGUIDs.end();
-
-        WorldPacket data;
-        if (isInBridgeChannel == true && channelDeliveryAvailable == true)
         {
-            // Members of the bridge channel see the message as a normal channel
-            // chat line attributed to the configured speaker character. The
-            // client resolves the senderGUID via SMSG_NAME_QUERY so the speaker
-            // appears with their real character name.
-            ChatHandler::BuildChatPacket(
-                data,
-                CHAT_MSG_CHANNEL,
-                LANG_UNIVERSAL,
-                ConfigSpeakerCharacterObjectGuid,
-                ConfigSpeakerCharacterObjectGuid,
-                display,
-                0,
-                "",
-                "",
-                0,
-                false,
-                ConfigInGameChannelName);
-        }
-        else
-        {
-            // Everyone else gets a system message so the bridge still reaches
-            // players who haven't joined the channel.
-            ChatHandler::BuildChatPacket(
-                data,
-                CHAT_MSG_SYSTEM,
-                LANG_UNIVERSAL,
-                ObjectGuid::Empty,
-                ObjectGuid::Empty,
-                systemDisplay,
-                0);
-        }
-        player->GetSession()->SendPacket(&data);
-    });
+            if (player == nullptr || player->GetSession() == nullptr)
+                return;
+
+            bool isInBridgeChannel = JoinedPlayerGUIDs.find(player->GetGUID()) != JoinedPlayerGUIDs.end();
+
+            WorldPacket data;
+            if (isInBridgeChannel == true && channelDeliveryAvailable == true)
+            {
+                // Members of the bridge channel see the message as a normal channel
+                // chat line attributed to the configured speaker character. The
+                // client resolves the senderGUID via SMSG_NAME_QUERY so the speaker
+                // appears with their real character name.
+                ChatHandler::BuildChatPacket(
+                    data,
+                    CHAT_MSG_CHANNEL,
+                    LANG_UNIVERSAL,
+                    ConfigSpeakerCharacterObjectGuid,
+                    ConfigSpeakerCharacterObjectGuid,
+                    display,
+                    0,
+                    "",
+                    "",
+                    0,
+                    false,
+                    ConfigInGameChannelName);
+            }
+            else
+            {
+                // Everyone else gets a system message so the bridge still reaches
+                // players who haven't joined the channel.
+                ChatHandler::BuildChatPacket(
+                    data,
+                    CHAT_MSG_SYSTEM,
+                    LANG_UNIVERSAL,
+                    ObjectGuid::Empty,
+                    ObjectGuid::Empty,
+                    systemDisplay,
+                    0);
+            }
+            player->GetSession()->SendPacket(&data);
+        });
 }

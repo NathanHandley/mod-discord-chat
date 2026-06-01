@@ -98,11 +98,9 @@ private:
     void SendOutboundToDiscord(DiscordChatOutboundMessage const& outbound);
     void PollDiscordForMessages();
 
-    // JSON helpers (just enough for Discord message payloads)
     static string JsonEscape(string const& value);
+    static bool IsWowSafeDisplayName(string const& value);
     static bool ExtractDiscordMessages(string const& json, vector<DiscordChatInboundMessage>& outMessages, string& outNewestId);
-
-    // Build a packet broadcast for a single inbound message to all members
     void BroadcastInboundMessageToChannel(DiscordChatInboundMessage const& inbound);
 
     // Threading
