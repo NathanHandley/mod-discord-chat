@@ -40,7 +40,8 @@ DiscordChatMod::DiscordChatMod() :
     ConfigDoAppendServerName(true),
     ConfigServerName("AzerothCore"),
     ConfigInGameChannelName("discord"),
-    ConfigNotifyReminderToJoinChannel(false),
+    ConfigNotifyReminderToJoinChannel(DISCORDCHAT_JOIN_REMINDER_DISABLED),
+    ConfigShowSystemMessageWhenNotInChannel(true),
     ConfigSpeakerCharacterGUID(0),
     ConfigSpeakerCharacterObjectGuid(ObjectGuid::Empty),
     ConfigDiscordApiBaseUrl("https://discord.com/api/v10"),
@@ -73,7 +74,13 @@ void DiscordChatMod::LoadConfigurationFile()
     ConfigDoAppendServerName = sConfigMgr->GetOption<bool>("DiscordChat.DoAppendServerName", true);
     ConfigServerName = sConfigMgr->GetOption<string>("DiscordChat.ServerName", "AzerothCore");
     ConfigInGameChannelName = sConfigMgr->GetOption<string>("DiscordChat.InGame.ChannelName", "discord");
-    ConfigNotifyReminderToJoinChannel = sConfigMgr->GetOption<bool>("DiscordChat.NotifyReminderToJoinChannel", false);
+    ConfigNotifyReminderToJoinChannel = sConfigMgr->GetOption<uint32>("DiscordChat.NotifyReminderToJoinChannel", DISCORDCHAT_JOIN_REMINDER_DISABLED);
+    if (ConfigNotifyReminderToJoinChannel > DISCORDCHAT_JOIN_REMINDER_EVERY_LOGIN)
+    {
+        LOG_ERROR("module.DiscordChat", "DiscordChatMod::LoadConfigurationFile has an invalid DiscordChat.NotifyReminderToJoinChannel value of {}; valid values are 0, 1, or 2. Defaulting to 0 (disabled).", ConfigNotifyReminderToJoinChannel);
+        ConfigNotifyReminderToJoinChannel = DISCORDCHAT_JOIN_REMINDER_DISABLED;
+    }
+    ConfigShowSystemMessageWhenNotInChannel = sConfigMgr->GetOption<bool>("DiscordChat.ShowSystemMessageWhenNotInChannel", true);
 
     ConfigSpeakerCharacterGUID = sConfigMgr->GetOption<uint32>("DiscordChat.InGame.SpeakerCharacterGUID", 0);
     ConfigSpeakerCharacterObjectGuid = ObjectGuid::Empty;
@@ -232,11 +239,15 @@ Channel* DiscordChatMod::GetServerChannel(Player* contextPlayer)
     return channelMgr->GetChannel(ConfigInGameChannelName, contextPlayer, false);
 }
 
-void DiscordChatMod::QueuePendingJoinReminder(Player* player)
+void DiscordChatMod::QueuePendingJoinReminder(Player* player, bool isFirstLogin)
 {
     if (IsEnabled == false)
         return;
-    if (ConfigNotifyReminderToJoinChannel == false)
+    if (ConfigNotifyReminderToJoinChannel == DISCORDCHAT_JOIN_REMINDER_DISABLED)
+        return;
+    // Mode 1 reminds only the very first time a character logs in; skip every
+    // subsequent login. Mode 2 reminds on every login.
+    if (ConfigNotifyReminderToJoinChannel == DISCORDCHAT_JOIN_REMINDER_FIRST_LOGIN_ONLY && isFirstLogin == false)
         return;
     if (player == nullptr)
         return;
@@ -1058,7 +1069,12 @@ void DiscordChatMod::BroadcastInboundMessageToChannel(DiscordChatInboundMessage 
             else
             {
                 // Everyone else gets a system message so the bridge still reaches
-                // players who haven't joined the channel.
+                // players who haven't joined the channel. Players who are not on
+                // the bridge channel only see this when the system-message
+                // fallback is enabled; players who are on the channel but lack
+                // channel-scoped delivery (no speaker configured) always get it.
+                if (isInBridgeChannel == false && ConfigShowSystemMessageWhenNotInChannel == false)
+                    return;
                 ChatHandler::BuildChatPacket(
                     data,
                     CHAT_MSG_SYSTEM,
@@ -1079,7 +1095,7 @@ void DiscordChatMod::SendJoinReminder(Player* player)
     if (ConfigInGameChannelName.empty() == true)
         return;
 
-    string reminder = "Reminder: you have not joined the '" + ConfigInGameChannelName +
+    string reminder = "Join the '" + ConfigInGameChannelName +
         "' channel that bridges chat with Discord. Type /join " + ConfigInGameChannelName +
         " to join it.";
     ChatHandler(player->GetSession()).SendSysMessage(reminder);

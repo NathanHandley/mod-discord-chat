@@ -18,6 +18,14 @@ using namespace std;
 class Player;
 class Channel;
 
+// Modes for DiscordChat.NotifyReminderToJoinChannel.
+enum DiscordChatJoinReminderMode
+{
+    DISCORDCHAT_JOIN_REMINDER_DISABLED         = 0, // never remind
+    DISCORDCHAT_JOIN_REMINDER_FIRST_LOGIN_ONLY = 1, // remind only on a character's first login
+    DISCORDCHAT_JOIN_REMINDER_EVERY_LOGIN      = 2  // remind on every login
+};
+
 class DiscordChatOutboundMessage
 {
 public:
@@ -44,7 +52,8 @@ public:
     bool ConfigDoAppendServerName;
     string ConfigServerName;
     string ConfigInGameChannelName;
-    bool ConfigNotifyReminderToJoinChannel;
+    uint32 ConfigNotifyReminderToJoinChannel;
+    bool ConfigShowSystemMessageWhenNotInChannel;
     uint32 ConfigSpeakerCharacterGUID;
     ObjectGuid ConfigSpeakerCharacterObjectGuid;
 
@@ -99,7 +108,7 @@ public:
     // whether the player is already a member. Instead we queue a short delay
     // (see ProcessPendingJoinReminders, ticked from the world update) and only
     // remind players who are still not on the channel once it elapses.
-    void QueuePendingJoinReminder(Player* player);
+    void QueuePendingJoinReminder(Player* player, bool isFirstLogin);
     void ProcessPendingJoinReminders(uint32 diff);
 
 private:

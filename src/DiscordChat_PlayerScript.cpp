@@ -36,9 +36,14 @@ public:
     {
         if (DiscordChat->IsEnabled == false)
             return;
+        // AT_LOGIN_FIRST is still set here; the core clears it right after this
+        // hook (and before OnPlayerFirstLogin), so this is where we can tell
+        // whether the character has ever logged in before. Mode 1 uses it to
+        // remind new characters only.
+        bool isFirstLogin = player != nullptr && player->HasAtLoginFlag(AT_LOGIN_FIRST);
         // Queue a deferred reminder; whether it actually fires depends on the
         // player not being on the bridge channel once the delay elapses.
-        DiscordChat->QueuePendingJoinReminder(player);
+        DiscordChat->QueuePendingJoinReminder(player, isFirstLogin);
     }
 
     void OnPlayerLogout(Player* player) override
