@@ -1096,7 +1096,7 @@ void DiscordChatMod::SendJoinReminder(Player* player)
         return;
 
     string reminder = "Join the '" + ConfigInGameChannelName +
-        "' channel that bridges chat with Discord. Type /join " + ConfigInGameChannelName +
-        " to join it.";
+        "' channel that bridges chat with Discord. Type |cff4CFF00/join " + ConfigInGameChannelName +
+        " |rto join it.";
     ChatHandler(player->GetSession()).SendSysMessage(reminder);
 }
