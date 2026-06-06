@@ -64,7 +64,14 @@ public:
             return true;
         if (channel == nullptr || player == nullptr)
             return true;
-        if (channel->GetName() != DiscordChat->ConfigInGameChannelName)
+        // Channel names are case-insensitive in WoW, and Channel::GetName()
+        // returns the name with whatever casing the first player to /join it
+        // used after the last restart (see ChannelMgr::GetJoinChannel). A plain
+        // != comparison against the configured name therefore silently drops
+        // outbound messages whenever that casing differs, which is why the
+        // game->Discord direction worked on some restarts but not others. Match
+        // case-insensitively, the same way the join/leave tracking does.
+        if (DiscordChat->IsBridgeChannelName(channel->GetName()) == false)
             return true;
 
         DiscordChat->TrackPlayerInChannel(player);
