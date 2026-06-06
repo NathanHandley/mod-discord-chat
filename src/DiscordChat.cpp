@@ -389,47 +389,137 @@ void DiscordChatMod::PollDiscordForMessages()
         InboundQueue.push_back(msg);
 }
 
+// Splits "https://host[:port]/path" into its pieces. Returns false (and logs)
+// for anything that isn't an https URL.
+static bool ParseHttpsUrl(string const& url, string& host, string& port, string& target)
+{
+    if (url.rfind("https://", 0) != 0)
+    {
+        LOG_ERROR("module.DiscordChat", "ParseHttpsUrl only supports https URLs (got {})", url);
+        return false;
+    }
+    string rest = url.substr(8);
+    string::size_type slashPos = rest.find('/');
+    string hostPort = slashPos == string::npos ? rest : rest.substr(0, slashPos);
+    target = slashPos == string::npos ? string("/") : rest.substr(slashPos);
+    host = hostPort;
+    port = "443";
+    string::size_type colonPos = hostPort.find(':');
+    if (colonPos != string::npos)
+    {
+        host = hostPort.substr(0, colonPos);
+        port = hostPort.substr(colonPos + 1);
+    }
+    return true;
+}
+
+// Performs a single HTTPS request/response with a hard deadline on every step.
+//
+// This deliberately uses the *asynchronous* Beast operations driven by
+// ioc.run(). beast::tcp_stream::expires_after() only bounds asynchronous
+// operations -- the synchronous connect/handshake/write/read calls this module
+// used previously ignored the timeout entirely, because nothing ran the
+// io_context to service the timer. A stalled socket (idle connection dropped by
+// a NAT/firewall, Discord not replying mid-read, etc.) then blocked the worker
+// thread forever with no error logged, silently killing the bridge until a
+// restart. Issuing each step async and running the context until it completes
+// makes expires_after actually enforce ConfigDiscordHttpTimeoutInMS.
+static bool PerformHttpsRequest(
+    http::request<http::string_body>& req,
+    string const& host,
+    string const& port,
+    uint32 timeoutMs,
+    string& responseOut,
+    unsigned& statusOut)
+{
+    auto const timeout = chrono::milliseconds(timeoutMs);
+
+    asio::io_context ioc;
+    ssl::context sslCtx(ssl::context::tlsv12_client);
+    sslCtx.set_default_verify_paths();
+    sslCtx.set_verify_mode(ssl::verify_none); // Discord cert verification is provided by base store; relax to avoid distro path quirks
+
+    tcp::resolver resolver(ioc);
+    beast::ssl_stream<beast::tcp_stream> stream(ioc, sslCtx);
+
+    if (SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()) == 0)
+    {
+        LOG_ERROR("module.DiscordChat", "PerformHttpsRequest failed to set SNI for host {}", host);
+        return false;
+    }
+
+    beast::error_code ec;
+
+    // DNS resolve stays synchronous: the resolver is not governed by the stream
+    // timer, and resolver hangs are rare and OS-bounded. Failures throw and are
+    // caught by the caller.
+    auto const results = resolver.resolve(host, port);
+
+    // Connect.
+    beast::get_lowest_layer(stream).expires_after(timeout);
+    beast::get_lowest_layer(stream).async_connect(results,
+        [&](beast::error_code e, tcp::endpoint) { ec = e; });
+    ioc.run();
+    ioc.restart();
+    if (ec)
+    {
+        LOG_ERROR("module.DiscordChat", "PerformHttpsRequest connect to {}:{} failed: {}", host, port, ec.message());
+        return false;
+    }
+
+    // TLS handshake.
+    beast::get_lowest_layer(stream).expires_after(timeout);
+    stream.async_handshake(ssl::stream_base::client, [&](beast::error_code e) { ec = e; });
+    ioc.run();
+    ioc.restart();
+    if (ec)
+    {
+        LOG_ERROR("module.DiscordChat", "PerformHttpsRequest TLS handshake with {} failed: {}", host, ec.message());
+        return false;
+    }
+
+    // Write request.
+    beast::get_lowest_layer(stream).expires_after(timeout);
+    http::async_write(stream, req, [&](beast::error_code e, size_t) { ec = e; });
+    ioc.run();
+    ioc.restart();
+    if (ec)
+    {
+        LOG_ERROR("module.DiscordChat", "PerformHttpsRequest write to {} failed: {}", host, ec.message());
+        return false;
+    }
+
+    // Read response.
+    beast::flat_buffer buffer;
+    http::response<http::string_body> res;
+    beast::get_lowest_layer(stream).expires_after(timeout);
+    http::async_read(stream, buffer, res, [&](beast::error_code e, size_t) { ec = e; });
+    ioc.run();
+    ioc.restart();
+    if (ec)
+    {
+        LOG_ERROR("module.DiscordChat", "PerformHttpsRequest read from {} failed: {}", host, ec.message());
+        return false;
+    }
+
+    responseOut = res.body();
+    statusOut = res.result_int();
+
+    // We already have the full response, so drop the connection rather than wait
+    // on the TLS close_notify round-trip (which would itself be a blocking step).
+    beast::error_code ignore;
+    beast::get_lowest_layer(stream).socket().shutdown(tcp::socket::shutdown_both, ignore);
+    beast::get_lowest_layer(stream).close();
+    return true;
+}
+
 bool DiscordChatMod::HttpPostJson(string const& url, string const& jsonBody, string& responseOut)
 {
     try
     {
-        // Parse url: expect https://host[:port]/path
-        if (url.rfind("https://", 0) != 0)
-        {
-            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpPostJson only supports https URLs (got {})", url);
+        string host, port, target;
+        if (ParseHttpsUrl(url, host, port, target) == false)
             return false;
-        }
-        string rest = url.substr(8);
-        string::size_type slashPos = rest.find('/');
-        string hostPort = slashPos == string::npos ? rest : rest.substr(0, slashPos);
-        string target = slashPos == string::npos ? string("/") : rest.substr(slashPos);
-        string host = hostPort;
-        string port = "443";
-        string::size_type colonPos = hostPort.find(':');
-        if (colonPos != string::npos)
-        {
-            host = hostPort.substr(0, colonPos);
-            port = hostPort.substr(colonPos + 1);
-        }
-
-        asio::io_context ioc;
-        ssl::context sslCtx(ssl::context::tlsv12_client);
-        sslCtx.set_default_verify_paths();
-        sslCtx.set_verify_mode(ssl::verify_none); // Discord cert verification is provided by base store; relax to avoid distro path quirks
-
-        tcp::resolver resolver(ioc);
-        beast::ssl_stream<beast::tcp_stream> stream(ioc, sslCtx);
-
-        if (SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()) == 0)
-        {
-            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpPostJson failed to set SNI for host {}", host);
-            return false;
-        }
-
-        auto const results = resolver.resolve(host, port);
-        beast::get_lowest_layer(stream).expires_after(chrono::milliseconds(ConfigDiscordHttpTimeoutInMS));
-        beast::get_lowest_layer(stream).connect(results);
-        stream.handshake(ssl::stream_base::client);
 
         http::request<http::string_body> req{ http::verb::post, target, 11 };
         req.set(http::field::host, host);
@@ -438,18 +528,9 @@ bool DiscordChatMod::HttpPostJson(string const& url, string const& jsonBody, str
         req.body() = jsonBody;
         req.prepare_payload();
 
-        beast::get_lowest_layer(stream).expires_after(chrono::milliseconds(ConfigDiscordHttpTimeoutInMS));
-        http::write(stream, req);
-
-        beast::flat_buffer buffer;
-        http::response<http::string_body> res;
-        http::read(stream, buffer, res);
-
-        responseOut = res.body();
-        unsigned status = res.result_int();
-
-        beast::error_code ec;
-        stream.shutdown(ec); // Ignore truncation errors per Beast docs
+        unsigned status = 0;
+        if (PerformHttpsRequest(req, host, port, ConfigDiscordHttpTimeoutInMS, responseOut, status) == false)
+            return false;
 
         if (status < 200 || status >= 300)
         {
@@ -469,60 +550,18 @@ bool DiscordChatMod::HttpGetJson(string const& url, string const& bearerToken, s
 {
     try
     {
-        if (url.rfind("https://", 0) != 0)
-        {
-            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpGetJson only supports https URLs (got {})", url);
+        string host, port, target;
+        if (ParseHttpsUrl(url, host, port, target) == false)
             return false;
-        }
-        string rest = url.substr(8);
-        string::size_type slashPos = rest.find('/');
-        string hostPort = slashPos == string::npos ? rest : rest.substr(0, slashPos);
-        string target = slashPos == string::npos ? string("/") : rest.substr(slashPos);
-        string host = hostPort;
-        string port = "443";
-        string::size_type colonPos = hostPort.find(':');
-        if (colonPos != string::npos)
-        {
-            host = hostPort.substr(0, colonPos);
-            port = hostPort.substr(colonPos + 1);
-        }
-
-        asio::io_context ioc;
-        ssl::context sslCtx(ssl::context::tlsv12_client);
-        sslCtx.set_default_verify_paths();
-        sslCtx.set_verify_mode(ssl::verify_none);
-
-        tcp::resolver resolver(ioc);
-        beast::ssl_stream<beast::tcp_stream> stream(ioc, sslCtx);
-
-        if (SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()) == 0)
-        {
-            LOG_ERROR("module.DiscordChat", "DiscordChatMod::HttpGetJson failed to set SNI for host {}", host);
-            return false;
-        }
-
-        auto const results = resolver.resolve(host, port);
-        beast::get_lowest_layer(stream).expires_after(chrono::milliseconds(ConfigDiscordHttpTimeoutInMS));
-        beast::get_lowest_layer(stream).connect(results);
-        stream.handshake(ssl::stream_base::client);
 
         http::request<http::string_body> req{ http::verb::get, target, 11 };
         req.set(http::field::host, host);
         req.set(http::field::user_agent, "AzerothCore-mod-discord-chat");
         req.set(http::field::authorization, string("Bot ") + bearerToken);
 
-        beast::get_lowest_layer(stream).expires_after(chrono::milliseconds(ConfigDiscordHttpTimeoutInMS));
-        http::write(stream, req);
-
-        beast::flat_buffer buffer;
-        http::response<http::string_body> res;
-        http::read(stream, buffer, res);
-
-        responseOut = res.body();
-        unsigned status = res.result_int();
-
-        beast::error_code ec;
-        stream.shutdown(ec);
+        unsigned status = 0;
+        if (PerformHttpsRequest(req, host, port, ConfigDiscordHttpTimeoutInMS, responseOut, status) == false)
+            return false;
 
         if (status < 200 || status >= 300)
         {
