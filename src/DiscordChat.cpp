@@ -15,6 +15,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
@@ -53,6 +54,10 @@ DiscordChatMod::DiscordChatMod() :
     ConfigDiscordOutgoingEnabled(true),
     ConfigDiscordPollIntervalInMS(5000),
     ConfigDiscordHttpTimeoutInMS(10000),
+    ConfigAnnounceBridgeStatusToPlayers(true),
+    ConfigBridgeDownThreshold(3),
+    ConfigBridgeDownMessage("The Discord chat bridge is currently unavailable. Messages to and from Discord may not be delivered until it recovers."),
+    ConfigBridgeUpMessage("The Discord chat bridge is back online."),
     WorkerRunning(false)
 {
 }
@@ -116,6 +121,13 @@ void DiscordChatMod::LoadConfigurationFile()
     ConfigDiscordIncomingEnabled = sConfigMgr->GetOption<bool>("DiscordChat.Discord.IncomingEnabled", true);
     ConfigDiscordPollIntervalInMS = sConfigMgr->GetOption<uint32>("DiscordChat.Discord.PollIntervalInMS", 5000);
     ConfigDiscordHttpTimeoutInMS = sConfigMgr->GetOption<uint32>("DiscordChat.Discord.HttpTimeoutInMS", 10000);
+
+    ConfigAnnounceBridgeStatusToPlayers = sConfigMgr->GetOption<bool>("DiscordChat.Discord.AnnounceBridgeStatusToPlayers", true);
+    ConfigBridgeDownThreshold = sConfigMgr->GetOption<uint32>("DiscordChat.Discord.BridgeDownThreshold", 3);
+    if (ConfigBridgeDownThreshold == 0)
+        ConfigBridgeDownThreshold = 1;
+    ConfigBridgeDownMessage = sConfigMgr->GetOption<string>("DiscordChat.Discord.BridgeDownMessage", "The Discord chat bridge is currently unavailable. Messages to and from Discord may not be delivered until it recovers.");
+    ConfigBridgeUpMessage = sConfigMgr->GetOption<string>("DiscordChat.Discord.BridgeUpMessage", "The Discord chat bridge is back online.");
 
     if (ConfigDiscordOutgoingEnabled == true && ConfigDiscordWebhookUrl.empty() == true)
     {
@@ -183,6 +195,84 @@ void DiscordChatMod::BroadcastPendingInboundMessages()
     }
     for (DiscordChatInboundMessage const& inbound : drained)
         BroadcastInboundMessageToChannel(inbound);
+}
+
+void DiscordChatMod::BroadcastPendingBridgeStatusNotices()
+{
+    if (IsEnabled == false)
+        return;
+
+    deque<string> drained;
+    {
+        lock_guard<mutex> lock(QueueMutex);
+        drained.swap(BridgeStatusNoticeQueue);
+    }
+    for (string const& notice : drained)
+        BroadcastBridgeStatusNoticeToPlayers(notice);
+}
+
+void DiscordChatMod::RecordPollOutcome(bool success)
+{
+    if (success == true)
+    {
+        ConsecutivePollFailures = 0;
+        // Announce recovery only if we previously told players it was down, so
+        // the very first successful poll on startup stays silent.
+        if (BridgeReportedDown == true)
+        {
+            BridgeReportedDown = false;
+            LOG_INFO("module.DiscordChat", "DiscordChatMod bridge connectivity recovered");
+            QueueBridgeStatusNotice(ConfigBridgeUpMessage);
+        }
+        return;
+    }
+
+    // Failure path. Only the first crossing of the threshold queues a notice;
+    // subsequent failures during the same outage stay silent to avoid spam.
+    if (BridgeReportedDown == true)
+        return;
+    ++ConsecutivePollFailures;
+    if (ConsecutivePollFailures >= ConfigBridgeDownThreshold)
+    {
+        BridgeReportedDown = true;
+        LOG_WARN("module.DiscordChat", "DiscordChatMod bridge connectivity lost after {} consecutive poll failures", ConsecutivePollFailures);
+        QueueBridgeStatusNotice(ConfigBridgeDownMessage);
+    }
+}
+
+void DiscordChatMod::QueueBridgeStatusNotice(string const& message)
+{
+    if (ConfigAnnounceBridgeStatusToPlayers == false)
+        return;
+    if (message.empty() == true)
+        return;
+
+    {
+        lock_guard<mutex> lock(QueueMutex);
+        BridgeStatusNoticeQueue.push_back(message);
+    }
+}
+
+void DiscordChatMod::BroadcastBridgeStatusNoticeToPlayers(string const& message)
+{
+    string systemDisplay = "[" + ConfigServerName + "] " + message;
+
+    ChatHandler(nullptr).DoForAllValidSessions([&](Player* player)
+        {
+            if (player == nullptr || player->GetSession() == nullptr)
+                return;
+
+            WorldPacket data;
+            ChatHandler::BuildChatPacket(
+                data,
+                CHAT_MSG_SYSTEM,
+                LANG_UNIVERSAL,
+                ObjectGuid::Empty,
+                ObjectGuid::Empty,
+                systemDisplay,
+                0);
+            player->GetSession()->SendPacket(&data);
+        });
 }
 
 void DiscordChatMod::TrackPlayerInChannel(Player* player)
@@ -362,8 +452,10 @@ void DiscordChatMod::PollDiscordForMessages()
     if (HttpGetJson(url, ConfigDiscordBotToken, response) == false)
     {
         LOG_ERROR("module.DiscordChat", "DiscordChatMod::PollDiscordForMessages failed to fetch messages");
+        RecordPollOutcome(false);
         return;
     }
+    RecordPollOutcome(true);
 
     vector<DiscordChatInboundMessage> parsed;
     string newestId;
@@ -450,10 +542,37 @@ static bool PerformHttpsRequest(
 
     beast::error_code ec;
 
-    // DNS resolve stays synchronous: the resolver is not governed by the stream
-    // timer, and resolver hangs are rare and OS-bounded. Failures throw and are
-    // caught by the caller.
-    auto const results = resolver.resolve(host, port);
+    // DNS resolve. The resolver is a standalone object not governed by the
+    // stream's expiry timer, so under a DNS outage a synchronous resolve() can
+    // block the worker thread for the OS resolver timeout (tens of seconds).
+    // Run it asynchronously and arm a separate timer that cancels the resolver
+    // when the deadline elapses, bounding it to the same timeout as every other
+    // step so the bridge worker stays responsive and recovers promptly.
+    tcp::resolver::results_type results;
+    {
+        asio::steady_timer resolveTimer(ioc);
+        resolveTimer.expires_after(timeout);
+        resolveTimer.async_wait([&](beast::error_code e)
+            {
+                // Fired (not cancelled) -> the resolve overran its deadline.
+                if (!e)
+                    resolver.cancel();
+            });
+        resolver.async_resolve(host, port,
+            [&](beast::error_code e, tcp::resolver::results_type r)
+            {
+                ec = e;
+                results = r;
+                resolveTimer.cancel();
+            });
+        ioc.run();
+        ioc.restart();
+    }
+    if (ec)
+    {
+        LOG_ERROR("module.DiscordChat", "PerformHttpsRequest resolve of {}:{} failed: {}", host, port, ec.message());
+        return false;
+    }
 
     // Connect.
     beast::get_lowest_layer(stream).expires_after(timeout);

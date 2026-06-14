@@ -147,8 +147,34 @@ DiscordChat.InGame.UseGlobalNameIfAvailable = True
 #   Default: 5000
 #
 #   DiscordChat.Discord.HttpTimeoutInMS
-#       Connect / read timeout for individual HTTPS requests to Discord.
+#       Connect / resolve / read timeout for individual HTTPS requests to
+#       Discord. Every step (DNS resolve, connect, TLS handshake, write, read)
+#       is bounded by this value on the background worker thread, so a Discord
+#       or DNS outage can never hang the bridge longer than this per request.
 #   Default: 10000
+#
+#   DiscordChat.Discord.AnnounceBridgeStatusToPlayers
+#       If True, players are notified in-game (as a system message) when the
+#       bridge loses connectivity to Discord and again when it recovers. The
+#       "unavailable" message is sent once per outage (no repeat/spam) and the
+#       "back online" message only after a prior outage. Detection is driven by
+#       the incoming poll heartbeat, so it requires IncomingEnabled = 1.
+#   Default: True
+#
+#   DiscordChat.Discord.BridgeDownThreshold
+#       Number of consecutive failed Discord polls before players are told the
+#       bridge is unavailable. Higher values avoid announcing brief transient
+#       blips. With the default PollIntervalInMS of 5000, a value of 3 waits
+#       roughly 15 seconds before announcing. Minimum effective value is 1.
+#   Default: 3
+#
+#   DiscordChat.Discord.BridgeDownMessage
+#       System message shown to players when the bridge is detected as down.
+#   Default: "The Discord chat bridge is currently unavailable. Messages to and from Discord may not be delivered until it recovers."
+#
+#   DiscordChat.Discord.BridgeUpMessage
+#       System message shown to players when the bridge recovers.
+#   Default: "The Discord chat bridge is back online."
 #
 ###################################################################################################
 
@@ -161,3 +187,7 @@ DiscordChat.Discord.OutgoingEnabled = 1
 DiscordChat.Discord.IncomingEnabled = 1
 DiscordChat.Discord.PollIntervalInMS = 5000
 DiscordChat.Discord.HttpTimeoutInMS = 10000
+DiscordChat.Discord.AnnounceBridgeStatusToPlayers = True
+DiscordChat.Discord.BridgeDownThreshold = 3
+DiscordChat.Discord.BridgeDownMessage = "The Discord chat bridge is currently unavailable. Messages to and from Discord may not be delivered until it recovers."
+DiscordChat.Discord.BridgeUpMessage = "The Discord chat bridge is back online."

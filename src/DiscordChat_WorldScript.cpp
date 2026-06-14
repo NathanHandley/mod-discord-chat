@@ -38,6 +38,7 @@ public:
             return;
         DrainAccumulatorMS = 0;
         DiscordChat->BroadcastPendingInboundMessages();
+        DiscordChat->BroadcastPendingBridgeStatusNotices();
     }
 
 private:

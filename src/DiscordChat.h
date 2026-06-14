@@ -66,6 +66,10 @@ public:
     bool   ConfigDiscordOutgoingEnabled;
     uint32 ConfigDiscordPollIntervalInMS;
     uint32 ConfigDiscordHttpTimeoutInMS;
+    bool   ConfigAnnounceBridgeStatusToPlayers;
+    uint32 ConfigBridgeDownThreshold;
+    string ConfigBridgeDownMessage;
+    string ConfigBridgeUpMessage;
 
     // Runtime state
     unordered_set<ObjectGuid> JoinedPlayerGUIDs;
@@ -88,6 +92,11 @@ public:
 
     // Inbound: Discord -> in-game (called from world thread via OnUpdate)
     void BroadcastPendingInboundMessages();
+
+    // Bridge status notices (Discord reachable / unreachable). The worker thread
+    // queues a one-shot notice on each up<->down transition; this drains and
+    // broadcasts them from the world thread, same as inbound messages.
+    void BroadcastPendingBridgeStatusNotices();
 
     // Channel membership tracking. AzerothCore has no OnJoinChannel /
     // OnLeaveChannel script hook in 3.3.5a, so we maintain our own set of
@@ -123,6 +132,16 @@ private:
     void SendOutboundToDiscord(DiscordChatOutboundMessage const& outbound);
     void PollDiscordForMessages();
 
+    // Bridge health tracking, driven off the poll heartbeat (worker thread).
+    // Records a poll outcome and, on a down<->up transition, queues a one-shot
+    // player notice. Only the worker thread touches the counters/flag.
+    void RecordPollOutcome(bool success);
+    // Queue a status notice for delivery to all online players (worker thread).
+    void QueueBridgeStatusNotice(string const& message);
+    // Broadcast one status notice to every online player as a system message
+    // (world thread).
+    void BroadcastBridgeStatusNoticeToPlayers(string const& message);
+
     static string JsonEscape(string const& value);
     static bool IsWowSafeDisplayName(string const& value);
     static bool ExtractDiscordMessages(string const& json, vector<DiscordChatInboundMessage>& outMessages, string& outNewestId);
@@ -142,6 +161,14 @@ private:
     condition_variable QueueCondVar;
     deque<DiscordChatOutboundMessage> OutboundQueue;
     deque<DiscordChatInboundMessage> InboundQueue;
+    // Status notices ("bridge down" / "bridge back up") awaiting delivery to
+    // players on the world thread. Guarded by QueueMutex.
+    deque<string> BridgeStatusNoticeQueue;
+
+    // Bridge health, owned exclusively by the worker thread. ReportedDown gates
+    // the notice so the "down" message is sent once per outage, not every poll.
+    uint32 ConsecutivePollFailures = 0;
+    bool BridgeReportedDown = false;
 
     // Tracks the most recently seen Discord message id for incremental polling
     string LastSeenDiscordMessageId;
