@@ -12,11 +12,16 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
+        // The worker thread reads the config strings (webhook URL, bot token, status messages) while it runs, so
+        // on a live ".reload config" it must be stopped (joined) before LoadConfigurationFile reassigns them.
+        // This also lets a reload enable/disable the bridge cleanly. Worst case the join waits out one in-flight
+        // HTTP request, which is bounded by DiscordChat.Discord.HttpTimeoutInMS.
+        if (reload == true)
+            DiscordChat->StopWorker();
         DiscordChat->LoadConfigurationFile();
         if (DiscordChat->IsEnabled == false)
             return;
-        if (reload == false)
-            DiscordChat->StartWorker();
+        DiscordChat->StartWorker();
     }
 
     void OnShutdown() override
